@@ -1,0 +1,103 @@
+# Design
+
+## When we say replace RMQ what we are talking about?
+
+In addition to the [AEP PR#30: Remove the dependence on RabbitMQ](https://github.com/aiidateam/AEP/pull/30)
+
+We are talking about remove `kiwipy` (therefore also a hidden package `pytray` for convert back and forth the sync <-> corountine) from `plumpy` as dependencies. 
+The `plumpy` is the real internal engine on top of which the `aiida-core` extent the `Process` to be `ProcessFunction`, `CalcJob` and `WorkChain`. 
+Meanwhile, the `plumpy` also define the base interfaces on how to persistent store the `Process` state so that can be recovered from checkpoints. 
+The `plumpy` need `kiwipy` to provide interface to talk to RMQ to manage the process running on the specific event loop of a worker's interpretor (the event loop is then in `aiida-core` managed inside daemon runner). 
+
+The connections between `plumpy` and `kiwipy` is actually not too many as I originally thought, the `plumpy` treat `kiwipy` as a so called "Communicator".
+The most important interface is `add_task_subscriber` which register a function (coroutine) that upon consuming message from RMQ the worker side decide how to deal with the `Process`. 
+Two parts require this `add_task_subscriber` interface.
+
+- The `Process` can be `launch` or `continue` by the `ProcessLauncher` registered with its `__call__` (queue up tasks). 
+- The `Process` itself when initilized, will registered the `message_reciever` to listen to queue when there are action signals to `play`, `pause` or `kill` the `Process`.
+
+### Design note
+
+Not all but quite a lot are taken from:
+
+- https://github.com/chrisjsewell/aiida-process-coordinato
+- https://github.com/chrisjsewell/aiida-process-coordinator/discussions/4
+- https://github.com/chrisjsewell/aiida-process-coordinator/issues/7#issuecomment-943361982
+- The AEP mentioned above.
+
+1. Server (Task coordinator)
+
+The coordinator functionalities are two folds, it is a message broker that communicate with the worker connected and it is a queue system that knows when to send which process to run on which worker (load balencing).
+
+It is in order to replace RMQ for queuing the tasks and persistent the task list on the disk. 
+Additional to using RMQ which lack of API to introspect task queues to determine the task list and task priorities.
+Using rust is just for the edging performance that can potentially handle millions of processes in the foreseeable future. 
+
+- It requires a server (task coordinator) runnig and waiting for messages to send to workers, the workers are client that runs on a python interpreter with an event loop.
+- The server will will listen for incoming tasks, manage worker connections (handshake and monitoring the heartbeat of the worker), and handle the load balencing of tasks to workers.
+- There are cases the workers will closed without finishing its tasks, when this happened coordinator need to know the state change of workers and resend the unfinished tasks to another worker. 
+- task coordinator implement persistent task queuing so that tasks can be recovered after a machine restarts. The go to solution I can see is using an embeded DB like RocksDB. 
+- Persistent (continue the point above): the embedeb DB only allowed one connection and this connection is from the coordinator (therefore, only the coordinator is directly communicate to the embedeb DB), it communicating with the worker and when worker respond, it update tasks (e.g. `pending`, `in_progress`, `completed`) into the serialized task data. (More details are discussed in later sections.) 
+
+2. Worker
+
+The worker is responsible for running python functions, in the context of plumpy, it is for running python coroutines by push the coroutines to the event loop that bind to the worker interpretor. 
+There are two ways of implementing the worker, one is having the worker as client and implemented in python, the harder way is implement worker in rust and expose the `add_task_subscriber` to python using `pyo3`.
+Having worker implemented in rust has the advantage that for future design to having multi-threading support or having specific threads for CPU-bound blocking functions the rust implementation is close to the low-lever threads management and has no limitation with GIL.
+However, the worker anyway require a wrapper layer between rust and python, which potentially make the debugging more difficult if really something goes wrong. 
+For simplicity, the worker should first implemented in python as a `Worker` class that can strat with event loop and has `add_task_subscriber` method to push coroutines to the event loop. 
+
+- Workers communicate with the rust server, getting messages from server and trigger the subscribed functions/coroutines to run on its own thread.
+- Each worker runs an event loop in Python, which waits for messages from the rust server . 
+- Upon receiving a message, the worker loads and executes the task. It should acknowledge back to coordinator that it get the task and keep on update the state of task running so the coordinator knows its loading. 
+- The first time when the worker start, it need to register to the coordinator a long-live task subscriber that responsible for launching the task and continuing the task. This subscriber will be removed with closing the worker or the coordinator is gone (TBD, not yet clear whether coordinator need to booking the state of subscribers)
+- Inside the worker, `add_task_subscriber` creates a task handler and the handler (coroutien) is scheduled to the event loop (this is the difficult part, I am not sure it is even possible. Because it seems require async imlementation that not block on waiting for the coroutine to finish but just push the coroutine to the worker event loop. May need async in rust worker?). 
+- Each real task is proceeded individually (corresponding to the `Process` in plumpy), and once run to comleted, the task's state is marked as complete and remove from coordinator's booking. 
+- only one worker working on a task a time, automatic requeueing of tasks if the worker died for whatever reason
+
+#### Task priorities
+
+The goal of this design are:
+
+- workers are not blocked by the slots limit instead it can have a max number of tasks and even it set to `1` things will continue and it can be the way to limit the resources usage. 
+- the workchains start running again once the child process they were waiting for were reach the terminated state (Seb's CIF cleaning).
+
+The task (`Process`) sending to the coordinator need to have a priority field to distinguish from its type and high priority tasks should run before the worker start to consume the low priority task.
+The purpose in the context of AiiDA is that the workchain itself is not a runnable process but the processes it encapsulates such as `CalcJob` and `ProcessFunction` are runnable.
+The workchain can be nested, therefore the inner workchain should have higher priority then the outer workchain to be run first. 
+
+In design, the fundamental tasks e.g. `CalcJob` and `ProcessFunction` that not rely on the completion of other process have negative priority value, the value is only to distinguish the type of processes and they have the same running priority.
+The reason to distinguish the base runnable processes is for future improvement, where we can have dedicated interperetor to run blocking CPU-bound processes. 
+For the workchain, it should have a stack of calling order to know if it is called from another workchain.
+The most outside workchain is given the priority value `1` and the value incremented when it goes deeper to ensure that inner process will be picked by the coordinator to run on worker first.
+
+There is still chances that the blocking process will starving the workers but it required to be solved if we can separate dedicated threads/runners for such tasks and having regular workers only to push running event loop forward. 
+
+#### When and what to communicate between coordinator and workers
+
+The [comment](https://github.com/aiidateam/AEP/pull/30#discussion_r766481043) enphasize that run a task zero or one time makes more sense for AiiDA since resounces consumed by AiiDA is always a concern in terms of running heavy calculation on the remote.
+In order to make task completion information more verbose so the coordinator can make good decision on whether send the task to other workers, the worker need to communicate two times back to coordinator, one when the worker get the task assigned, it reply back it will running on it, then when the task is complete it need to send back again to say the task is real done.
+The coordinator will keep the list of running tasks and ensure no duplicate tasks are send to other workers. 
+The AiiDA has its DB that also hold the process completion information, and this information will be synchronize with coordinator whenever coordinator restart or manually triggered when needed. 
+When the tasks is really completed, it is safe to be removed from the running tasks list and coordinator can assign new to workers.
+This strategy is different from but better than the current RMQ solution, where when a process submitted, a request to run the process is sent to RMQ which will then send the task to a worker (worker get the message and put it in its event loop). To guarantee that each task will be executed, RMQ will wait for the worker to confirm the task is done or not. 
+If the task is not done, RMQ will send the task to another worker if the previous worker was detected to miss the heartbeat and regarded as "died worker". 
+Two times communication release the problem that coordinator need to keep task on the queue until it finished.
+
+### Experiments required before start
+
+These are collection and short summary of awswers from ChatGPT 4o, which give the hints for tools and technique stacks where I should look and clear the path before start.
+I don't fully trust so the experimentals required.
+
+#### Can I run a python coroutine in the thread that spawned in the rust side?
+
+ChatGPT points that:
+
+1. Python's GIL must be acquired before interacting with Python objects from Rust. (first prepares the Python interpretor by `pyo3::prepare_freethreaded_python()` and then `Python::with_gil()`)
+2. Set up an asyncio event loop. This requires to run inside the thread `asyncio.get_event_loop` and in the loop call `run_until_complet` of the coroutine from the task handler.
+
+Comments: 
+
+- The key point to check is make sure not new thread is created for each coroutine but the thread/event_loop has the lifetime of worker (this is the new design after move from `tornado` to `asyncio` which can only support one event loop, so probably with handle thread by rust every process can again run on their own event loop??). 
+- It may also be possible (better) to turn the python coroutine into a rust future and then using tokio runtime to poll the future to complete. This require the crate `pyo3_asyncio` as bridge to pass python's coroutine to rust tokio runtime. 
+
