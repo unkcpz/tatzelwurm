@@ -1,5 +1,5 @@
 # tatzelwurm
 
-tatzelwurm is a lightweight persistent queue system to deal with local process calls and broadcast.
+tatzelwurm is a lightweight persistent queue system to deal with local process calls and broadcast between coordinator and workers.
 
 - The design consideration is in DESIGN.md

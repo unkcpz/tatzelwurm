@@ -1,6 +1,6 @@
 # Design
 
-## When we say replace RMQ what we are talking about?
+### When we say replace RMQ what we are talking about?
 
 In addition to the [AEP PR#30: Remove the dependence on RabbitMQ](https://github.com/aiidateam/AEP/pull/30)
 
@@ -18,37 +18,42 @@ Two parts require this `add_task_subscriber` interface.
 
 ### Design note
 
+The related design pattern is:
+- [pub/sub](https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber).
+
 Not all but quite a lot are taken from:
 
-- https://github.com/chrisjsewell/aiida-process-coordinato
+- https://github.com/chrisjsewell/aiida-process-coordinator
 - https://github.com/chrisjsewell/aiida-process-coordinator/discussions/4
 - https://github.com/chrisjsewell/aiida-process-coordinator/issues/7#issuecomment-943361982
 - The AEP mentioned above.
 
 1. Task coordinator
 
-The coordinator functionalities are two folds, it is a message broker that communicate with the worker connected and it is a queue system that knows when to send which process to run on which worker (load balencing).
+The coordinator plays two major roles. 
+It is a message broker that communicate with the worker connected and it is a queue system that knows when to send which process to run on which worker (load balencing).
 
 It is in order to replace RMQ for queuing the tasks and persistent the task list on the disk. 
 Additional to using RMQ which lack of API to introspect task queues to determine the task list and task priorities.
 Using rust is just for the edging performance that can potentially handle millions of processes in the foreseeable future. 
 
 - It requires a server (task coordinator) runnig and waiting for messages to send to workers, the workers are client that runs on a python interpreter with an event loop.
-- The server will will listen for incoming tasks, manage worker connections (handshake and monitoring the heartbeat of the worker), and handle the load balencing of tasks to workers.
+- The server will listen for incoming tasks, manage worker connections (handshake and monitoring the heartbeat of the worker), and handle the load balencing of tasks to workers.
 - There are cases the workers will closed without finishing its tasks, when this happened coordinator need to know the state change of workers and resend the unfinished tasks to another worker. 
-- task coordinator implement persistent task queuing so that tasks can be recovered after a machine restarts. The go to solution I can see is using an embeded DB like RocksDB. 
-- Persistent (continue the point above): the embedeb DB only allowed one connection and this connection is from the coordinator (therefore, only the coordinator is directly communicate to the embedeb DB), it communicating with the worker and when worker respond, it update tasks (e.g. `pending`, `in_progress`, `completed`) into the serialized task data. (More details are discussed in later sections.) 
+- task coordinator implement persistent task queuing so that tasks can be recovered after a machine restarts. The go to solution I can see is using an embeded DB like RocksDB or use Redis with its RDB+AOL. 
+- Persistent (continue of the point above): the embedeb DB only allowed one connection and this connection is from the coordinator (therefore, only the coordinator is directly communicate to the embedeb DB), it communicating with the worker and when worker respond, it update tasks (e.g. `pending`, `in_progress`, `completed`) into the serialized task data. (More details are discussed in later sections.) 
 
 2. Worker
 
-The worker is responsible for running python functions, in the context of plumpy, it is for running python coroutines by push the coroutines to the event loop that bind to the worker interpretor. 
+The worker is responsible for running python functions (or more generic if the worker backend is in Rust, I can build on top the wrapper to more different languages).
+In the context of plumpy, it is for running python coroutines by push the coroutines to the event loop that bind to the worker interpretor. 
 There are two ways of implementing the worker, one is having the worker as client and implemented in python, the harder way is implement worker in rust and expose the `add_task_subscriber` to python using `pyo3`.
 Having worker implemented in rust has the advantage that for future design to having multi-threading support or having specific threads for CPU-bound blocking functions the rust implementation is close to the low-lever threads management and has no limitation with GIL.
 However, the worker anyway require a wrapper layer between rust and python, which potentially make the debugging more difficult if really something goes wrong. 
-For simplicity, the worker should first implemented in python as a `Worker` class that can strat with event loop and has `add_task_subscriber` method to push coroutines to the event loop. 
+For simplicity, the worker should first implemented in python as a `Worker` class that can strat with event loop and has `add_task_subscriber` method to push coroutines to its event loop. 
 
 - Workers communicate with the rust server, getting messages from server and trigger the subscribed functions/coroutines to run on its own thread.
-- Each worker runs an event loop in Python, which waits for messages from the rust server . 
+- Each worker runs an event loop in Python, which waits for messages from the rust server. 
 - Upon receiving a message, the worker loads and executes the task. It should acknowledge back to coordinator that it get the task and keep on update the state of task running so the coordinator knows its loading. 
 - The first time when the worker start, it need to register to the coordinator a long-live task subscriber that responsible for launching the task and continuing the task. This subscriber will be removed with closing the worker or the coordinator is gone (TBD, not yet clear whether coordinator need to booking the state of subscribers)
 - Inside the worker, `add_task_subscriber` creates a task handler and the handler (coroutien) is scheduled to the event loop (this is the difficult part, I am not sure it is even possible. Because it seems require async imlementation that not block on waiting for the coroutine to finish but just push the coroutine to the worker event loop. May need async in rust worker?). 
@@ -61,17 +66,21 @@ The goal of this design are:
 
 - workers are not blocked by the slots limit instead it can have a max number of tasks and even it set to `1` things will continue and it can be the way to limit the resources usage. 
 - the workchains start running again once the child process they were waiting for were reach the terminated state (Seb's CIF cleaning).
+- in a regular load (?definition required after implementation and bench) only one worker required for the non-blocking processes, and number of worker controller is for blocking running workers only.
 
 The task (`Process`) sending to the coordinator need to have a priority field to distinguish from its type and high priority tasks should run before the worker start to consume the low priority task.
 The purpose in the context of AiiDA is that the workchain itself is not a runnable process but the processes it encapsulates such as `CalcJob` and `ProcessFunction` are runnable.
 The workchain can be nested, therefore the inner workchain should have higher priority then the outer workchain to be run first. 
 
-In design, the fundamental tasks e.g. `CalcJob` and `ProcessFunction` that not rely on the completion of other process have negative priority value, the value is only to distinguish the type of processes and they have the same running priority.
+In the design, the processes have different categories which fall in to different topic when the subscriber need to pick up to run.
+The fundamental tasks e.g. `CalcJob` and `ProcessFunction` that not rely on the completion of other process are in the topic 'baseproc-a' (`ProcessFunction`) and 'baseproc-b' (`CalcJob`), and they have the same running priority `0`.
 The reason to distinguish the base runnable processes is for future improvement, where we can have dedicated interperetor to run blocking CPU-bound processes. 
-For the workchain, it should have a stack of calling order to know if it is called from another workchain.
-The most outside workchain is given the priority value `1` and the value incremented when it goes deeper to ensure that inner process will be picked by the coordinator to run on worker first.
+For the workchain the process is bind with topic 'compproc', it should have a stack of calling order to know if it is called from another workchain.
+The most outside workchain is given the priority value `1` and the value incremented when it goes deeper to ensure that inner process will be picked by the coordinator to run on worker first, that is to say the large the priority number the ealier it is picked up to be run.
 
 There is still chances that the blocking process will starving the workers but it required to be solved if we can separate dedicated threads/runners for such tasks and having regular workers only to push running event loop forward. 
+Based on the topic, it can have dedicated worker that only to consuming 'baseproc-a' topic for running `ProcessFunction`.
+While for the `CalcJob` and `WorkChain` they can all push to be run in the same async runtime.
 
 #### Persistent queue state to disk
 
