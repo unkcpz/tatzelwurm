@@ -25,7 +25,7 @@ Not all but quite a lot are taken from:
 - https://github.com/chrisjsewell/aiida-process-coordinator/issues/7#issuecomment-943361982
 - The AEP mentioned above.
 
-1. Server (Task coordinator)
+1. Task coordinator
 
 The coordinator functionalities are two folds, it is a message broker that communicate with the worker connected and it is a queue system that knows when to send which process to run on which worker (load balencing).
 
@@ -72,6 +72,19 @@ For the workchain, it should have a stack of calling order to know if it is call
 The most outside workchain is given the priority value `1` and the value incremented when it goes deeper to ensure that inner process will be picked by the coordinator to run on worker first.
 
 There is still chances that the blocking process will starving the workers but it required to be solved if we can separate dedicated threads/runners for such tasks and having regular workers only to push running event loop forward. 
+
+#### Persistent queue state to disk
+
+The queue or aka processes state record booking should be able to be persistently stored in the disk between the restart session.
+In order to maximize the performance for high-throughput, the running processes booking is in memory. 
+For persistent, when the coordinator shutdown, the current booking is write to the file as booking database (BDB) for recover the booking of next restart.
+However, there is possibility that the coordinator may not gracefully shutdown. 
+As a backup solution of such scenario, the append only file (AOF) is keeping the logs of every booking change and can be used to reconstruct full booking before shutdown.
+These two mechanism are exclusively used for the newly restart of coordinator. 
+If the coordinator is gracefully shutdown, BDB is written for recovering the next coordinator session and the AOF file will be cleaned up and log events will only for recording the new running session.
+
+The cons of this design is the size AOF can grown fast in the high-throughput, and if the coordinator keep on running of long time (in the scale of monthes, the AOF can be extremely large and expensive to rerun events to recover the booking).
+The enhancement can be the BDB is dumped to the disk from memory periodicly and remove the events happened until the dump period so the AOF only contain the events for recovering from dumped BDB.
 
 #### When and what to communicate between coordinator and workers
 
