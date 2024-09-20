@@ -1,5 +1,6 @@
 use std::io::Cursor;
 
+use atoi::atoi;
 use bytes::{Buf, Bytes, BytesMut};
 use tokio::{
     io::AsyncReadExt,
@@ -11,7 +12,11 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum StreamError {
     #[error("incomplete stream to parse as a frame")]
-    InComplete
+    InComplete,
+    #[error("unable to parse {0:?}")]
+    ParseError(Bytes),
+    #[error("unknown data type leading with byte {0:?}")]
+    UnknownType(u8),
 }
 
 #[tokio::main]
@@ -44,20 +49,22 @@ async fn process_stream(mut stream: TcpStream) -> anyhow::Result<()> {
                 let mut src = Cursor::new(&buf[..]);
 
                 match check_frame(&mut src) {
-                    Ok(_) => {
-                        // since check frame will move cursor position forward, 
+                    Ok(()) => {
+                        // since check frame will move cursor position forward,
                         // I store the position for advancing buffer to discard.
                         let len = src.position() as usize;
 
                         // reset seek pos to 0 to parse
                         src.set_position(0);
-                        let frame = parse_frame(src);
+                        let frame = parse_frame(&mut src);
+
+                        dbg!(frame);
 
                         // discard bytes that already read
                         buf.advance(len);
                     }
                     Err(InComplete) => continue,
-                    Err(err) => anyhow::bail!("check frame failed, {err:?}"),
+                    Err(err) => anyhow::bail!("check frame failed, {err}"),
                 }
             }
             Err(err) => anyhow::bail!("unable to handle stream, {err:?}"),
@@ -67,15 +74,64 @@ async fn process_stream(mut stream: TcpStream) -> anyhow::Result<()> {
 }
 
 fn check_frame(src: &mut Cursor<&[u8]>) -> Result<(), StreamError> {
-    todo!()
+    // TODO: deal with src already empty
+    match src.get_u8() {
+        b'$' => {
+            // bulk string https://redis.io/docs/latest/develop/reference/protocol-spec/#bulk-strings
+            let line = get_line(src)?;
+            let len = atoi::<usize>(line)
+                .ok_or_else(|| StreamError::ParseError(Bytes::from(line.to_owned())))?;
+
+            if src.remaining() < len + 2 {
+                return Err(StreamError::InComplete);
+            }
+
+            src.advance(len + 2);
+
+            Ok(())
+        }
+        b => Err(StreamError::UnknownType(b)),
+    }
+}
+
+fn get_line<'a>(src: &mut Cursor<&'a [u8]>) -> Result<&'a [u8], StreamError> {
+    let start = src.position() as usize;
+    let end = src.get_ref().len() - 1;
+
+    for i in start..end {
+        if src.get_ref()[i] == b'\r' && src.get_ref()[i + 1] == b'\n' {
+            // step and consume in cursor
+            src.set_position((i + 2) as u64);
+
+            return Ok(&src.get_ref()[start..i]);
+        }
+    }
+
+    Err(StreamError::InComplete)
 }
 
 // TODO: depend on use case maybe no need to use different frame type
 // Now the idea is borrowed from redis.
+#[derive(Debug)]
 enum Frame {
-    BulkString(Bytes) 
+    BulkString(Bytes),
 }
 
-fn parse_frame(src: Cursor<&[u8]>) -> Result<Frame, StreamError> {
-    todo!()
+fn parse_frame(src: &mut Cursor<&[u8]>) -> Result<Frame, StreamError> {
+    match src.get_u8() {
+        b'$' => {
+            let line = get_line(src)?;
+            let len = atoi::<usize>(line)
+                .ok_or_else(|| StreamError::ParseError(Bytes::from(line.to_owned())))?;
+
+            if src.remaining() < len + 2 {
+                return Err(StreamError::InComplete);
+            }
+
+            let data = Bytes::copy_from_slice(&src.chunk()[..len]);
+
+            Ok(Frame::BulkString(data))
+        }
+        _ => todo!(),
+    }
 }

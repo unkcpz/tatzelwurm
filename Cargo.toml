@@ -5,6 +5,15 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.89"
+atoi = "2.0.0"
 bytes = "1.7.2"
 thiserror = "1.0.63"
 tokio = { version = "1.40.0", features = ["full"] }
+
+[[bin]]
+name = "coordinator"
+path = "src/main.rs"
+
+[[bin]]
+name = "worker"
+path = "src/bin/client.rs"
