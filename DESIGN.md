@@ -106,6 +106,20 @@ This strategy is different from but better than the current RMQ solution, where 
 If the task is not done, RMQ will send the task to another worker if the previous worker was detected to miss the heartbeat and regarded as "died worker". 
 Two times communication release the problem that coordinator need to keep task on the queue until it finished.
 
+Therefore for worker, it has following communication scenario:
+
+- Handshake: for security purpose, talk to coordinator to show it is a valid worker. Bidirectional communication.
+- Heartbeat: monodirectional communication from worker to coordinator. It requires write half from stream.
+- Mission assigned: worker get a mission ID from coordinator, reply when it create the mission from ID (push to its own event loop). Bidirectional communication.
+- Mission complete: worker finish the mission, send an ack to coordinator so coordinator can make the booking and assign more missions to worker. 
+
+As corresponding, the coordinator needs to:
+
+- Handshake: get to know new worker is willing to connect, authorize it. Bidirectional communication.
+- Heartbeat: monodirection from worker, and coordinator is only read from stream to check the worker is alive.
+- Assign mission: send mission Id to the lowest load worker, and change the mission state to assigning. When worker reply with on processing, coordinator update state to "running".
+- Mission complete: worker will send a message when mission complete, the coordinator need then update the process state to complete (delete from list).
+
 ### Experiments required before start
 
 These are collection and short summary of awswers from ChatGPT 4o, which give the hints for tools and technique stacks where I should look and clear the path before start.
