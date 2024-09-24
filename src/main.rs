@@ -28,7 +28,11 @@ async fn main() -> anyhow::Result<()> {
             Ok((socket, addr)) => {
                 // TODO: spawn task for handling every client
                 println!("Client listen on: {addr}");
-                process_stream(socket).await?;
+                tokio::spawn(async move {
+                    // TODO: process_stream shouldn't return, using tracing to recording logs and
+                    // handling errors
+                    let _ = process_stream(socket).await;
+                });
             }
             Err(err) => println!("client cannot has connection established {err:?}"),
         }
@@ -42,40 +46,52 @@ async fn process_stream(mut stream: TcpStream) -> anyhow::Result<()> {
 
     loop {
         // TODO: deal with read timeout
+        // wrap in cursor to seek the len to advance and discard
+        let mut src = Cursor::new(&buf[..]);
+
+        match check_frame(&mut src) {
+            Ok(()) => {
+                // since check frame will move cursor position forward,
+                // I store the position for advancing buffer to discard.
+                let len = src.position();
+
+                // reset seek pos to 0 to parse
+                src.set_position(0);
+                let frame = parse_frame(&mut src);
+
+                dbg!(frame);
+
+                // discard bytes that already read
+                buf.advance(len as usize);
+            }
+            Err(InComplete) => {}
+            Err(err) => anyhow::bail!("check frame failed, {err}"),
+        }
+
         match stream.read_buf(&mut buf).await {
-            Ok(0) => break,
-            Ok(_) => {
-                // wrap in cursor to seek the len to advance and discard
-                let mut src = Cursor::new(&buf[..]);
-
-                match check_frame(&mut src) {
-                    Ok(()) => {
-                        // since check frame will move cursor position forward,
-                        // I store the position for advancing buffer to discard.
-                        let len = src.position() as usize;
-
-                        // reset seek pos to 0 to parse
-                        src.set_position(0);
-                        let frame = parse_frame(&mut src);
-
-                        dbg!(frame);
-
-                        // discard bytes that already read
-                        buf.advance(len);
-                    }
-                    Err(InComplete) => continue,
-                    Err(err) => anyhow::bail!("check frame failed, {err}"),
+            Ok(0) => {
+                if buf.is_empty() {
+                    break;
                 }
             }
+            Ok(_) => {}
             Err(err) => anyhow::bail!("unable to handle stream, {err:?}"),
         }
     }
     Ok(())
 }
 
+fn get_u8(src: &mut Cursor<&[u8]>) -> Result<u8, StreamError> {
+    if !src.has_remaining() {
+        return Err(StreamError::InComplete);
+    }
+
+    Ok(src.get_u8())
+}
+
 fn check_frame(src: &mut Cursor<&[u8]>) -> Result<(), StreamError> {
     // TODO: deal with src already empty
-    match src.get_u8() {
+    match get_u8(src)? {
         b'$' => {
             // bulk string https://redis.io/docs/latest/develop/reference/protocol-spec/#bulk-strings
             let line = get_line(src)?;
