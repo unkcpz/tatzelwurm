@@ -60,9 +60,34 @@ For simplicity, the worker should first implemented in python as a `Worker` clas
 - Each real task is proceeded individually (corresponding to the `Process` in plumpy), and once run to comleted, the task's state is marked as complete and remove from coordinator's booking. 
 - only one worker working on a task a time, automatic requeueing of tasks if the worker died for whatever reason
 
+#### Proactive mission assignment to workers
+
+The major different between the legacy design and the new design is the way how missions assigned to worker.
+
+- legacy design: worker take from queue channel.
+- new: coordinator hold a booking (with mutex so no racing). In every tcp stream with worker the coordinator look at booking and push mission to worker. 
+
+In the new design, the coordinator not only just fan-out the mission and wait it to be consumed when new mission created. 
+It also waits for the response that the mission is taken and wait for the message that the mission is finished. 
+The coordinator needs to frequently look at the booking and decide which to do with each worker. 
+But what is the driven force for coordinator to look at the booking? 
+Everytime the coordinator look at the booking it has some cost, thus too often booking check will bring overhead. 
+On the contrary, less often booking check will cause the missions not efficiently assigned and therefore jams the pipeline.
+To ensure the good rate of throughput and avoid leaving workers to unnessesary idle, the booking checking is happened in the following case:
+
+- when new mission is filed and coordinator aware of it.
+- in the certain interval it ask itself to chek the booking and keep things ongoing.
+
+It requires to benchmark the performance of booking check on a very big table and decide which should be the proper default interval for booking check.
+
+Design diverge (TBD): there can be two ways to assign missions:
+
+- directly send to worker, which seems easier to implement but a bit couple for the stream.
+- send to the channel subscribed by the worker and let worker to consume. The channel decouple the stream so maybe a bit more flexible.
+
 #### Task priorities
 
-The goal of this design are:
+The goals of this design are:
 
 - workers are not blocked by the slots limit instead it can have a max number of tasks and even it set to `1` things will continue and it can be the way to limit the resources usage. 
 - the workchains start running again once the child process they were waiting for were reach the terminated state (Seb's CIF cleaning).
