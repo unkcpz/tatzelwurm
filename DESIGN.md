@@ -48,6 +48,7 @@ Using rust is just for the edging performance that can potentially handle millio
 The worker is responsible for running python functions (or more generic if the worker backend is in Rust, I can build on top the wrapper to more different languages).
 In the context of plumpy, it is for running python coroutines by push the coroutines to the event loop that bind to the worker interpretor. 
 There are two ways of implementing the worker, one is having the worker as client and implemented in python, the harder way is implement worker in rust and expose the `add_task_subscriber` to python using `pyo3`.
+(? May possible to further seperate define the functionalitios of worker. It needs to communicate and running things. The communicate port is de/serializing the data and this port can definitly use the API exposed through `pyo3` here.)
 Having worker implemented in rust has the advantage that for future design to having multi-threading support or having specific threads for CPU-bound blocking functions the rust implementation is close to the low-lever threads management and has no limitation with GIL.
 However, the worker anyway require a wrapper layer between rust and python, which potentially make the debugging more difficult if really something goes wrong. 
 For simplicity, the worker should first implemented in python as a `Worker` class that can strat with event loop and has `add_task_subscriber` method to push coroutines to its event loop. 
@@ -60,9 +61,23 @@ For simplicity, the worker should first implemented in python as a `Worker` clas
 - Each real task is proceeded individually (corresponding to the `Process` in plumpy), and once run to comleted, the task's state is marked as complete and remove from coordinator's booking. 
 - only one worker working on a task a time, automatic requeueing of tasks if the worker died for whatever reason
 
+3. Actioner
+
+There is always a guy look into system from outside and try to make some action. 
+It is us the regular aiida user who is willing to launch, pause, resume, and kill the process.
+I call this role the actioner. 
+The actioner will send the operation through message to coordinator and coordinator then send (or broadcase) the message to workers.
+
+#### Two tables
+
+The coordinator should grab two tables to operate on its mission.
+The two tables are workers table which record the workers state information and the tasks table which record the states of tasks.
+
+Everytime when the coordinator "look at" two tables, it needs to make the decision on what operation needs to be take.
+
 #### Proactive mission assignment to workers
 
-The major different between the legacy design and the new design is the way how missions assigned to worker.
+The major different between the legacy design and the new design will be the way how missions assigned to worker.
 
 - legacy design: worker take from queue channel.
 - new: coordinator hold a booking (with mutex so no racing). In every tcp stream with worker the coordinator look at booking and push mission to worker. 
@@ -144,6 +159,18 @@ As corresponding, the coordinator needs to:
 - Heartbeat: monodirection from worker, and coordinator is only read from stream to check the worker is alive.
 - Assign mission: send mission Id to the lowest load worker, and change the mission state to assigning. When worker reply with on processing, coordinator update state to "running".
 - Mission complete: worker will send a message when mission complete, the coordinator need then update the process state to complete (delete from list).
+
+#### Data frame and serialization
+
+- **Decision**: framed data (if rust, using `codec`, if python using `asyncio` stream). 
+- **Decision**: de/serialize message, using `MessagePack` for extensibility and simplicity.
+
+Since I need to take care of bytes over wire with async, I need to transfer framed data.
+I decide to use `tokio_util::codec` to frame the data.
+For the protocol, instead of design a new one, using `MessagePack` and wrap struct into it can be easy to start.
+The MessagePack is like JSON but a binary message which can be more efficient in transportation.
+If in future we find the message between clients and coordinator is always simple, we can change to using self designed protocol such as redis-like protocol.
+If we find in the future we need more big chunk of data to communicate, the MessagePack can fit for storing more complicate format.
 
 ### Experiments required before start
 
