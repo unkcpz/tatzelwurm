@@ -19,18 +19,17 @@ use tokio_util::codec::{Framed, FramedRead, FramedWrite, LengthDelimitedCodec};
 use tatzelwurm::{Codec, TMessage};
 use uuid::Uuid;
 
-#[derive(Error, Debug)]
-pub enum StreamError {
-    #[error("incomplete stream to parse as a frame")]
-    InComplete,
-    #[error("unable to parse {0:?}")]
-    ParseError(Bytes),
-    #[error("unknown data type leading with byte {0:?}")]
-    UnknownType(u8),
+#[derive(Debug)]
+struct Worker {
+    // The rx used for communicate
+    tx: mpsc::Sender<TMessage>,
+
+    // number of processes running on this worker
+    load: u64,
 }
 
 // XXX: use tokio Mutex or sync Mutex?
-type ClientMap = Arc<Mutex<HashMap<Uuid, mpsc::Sender<TMessage>>>>;
+type ClientMap = Arc<Mutex<HashMap<Uuid, Worker>>>;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,12 +55,14 @@ async fn main() -> anyhow::Result<()> {
                 // XXX: for demo, always attach mpsc channel at the moment for all types of clients.
 
                 let (tx, rx) = mpsc::channel(100);
-                client_map.lock().await.insert(client_id, tx);
+                let worker = Worker { tx, load: 0 };
+                client_map.lock().await.insert(client_id, worker);
 
+                let client_map_clone = Arc::clone(&client_map);
                 tokio::spawn(async move {
                     // TODO: process_stream shouldn't return, using tracing to recording logs and
                     // handling errors
-                    let _ = handle_client(stream, rx).await;
+                    let _ = handle_client(stream, rx, client_id, client_map_clone).await;
                 });
             }
             Err(err) => println!("client cannot has connection established {err:?}"),
@@ -69,18 +70,46 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn load_balancing(client_map: ClientMap) {
-    todo!()
+// TODO: TBD if using least loaded. If the type of process is tagged.
+async fn load_balancing(client_map: ClientMap) -> anyhow::Result<()> {
+    let mut interval = time::interval(Duration::from_millis(2000));
+
+    loop {
+        interval.tick().await;
+        dbg!(&client_map);
+
+        async {
+            if let Some(act_on) = client_map
+                .lock().await
+                .iter()
+                .min_by_key(|&(_, client)| client.load)
+                .map(|(&uuid, worker)| (uuid, worker))
+            {
+                let uuid_ = act_on.0;
+                let worker = act_on.1;
+
+                let message = TMessage {
+                    id: 3,
+                    content: format!("processed by worker {uuid_}"),
+                };
+                if let Err(e) = worker.tx.send(message).await {
+                    eprintln!("Failed to send message: {e}");
+                }
+            } else {
+                println!("no worker yet.");
+            }
+        }.await;
+    }
 }
 
-async fn handle_client(mut stream: TcpStream, mut rx: Receiver<TMessage>) -> anyhow::Result<()> {
+async fn handle_client(stream: TcpStream, mut rx: Receiver<TMessage>, client_id: Uuid, client_map: ClientMap) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 
     let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
     let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
 
-    let mut interval = time::interval(Duration::from_millis(500));
+    let mut interval = time::interval(Duration::from_millis(2000));
 
     loop {
         tokio::select! {
@@ -90,8 +119,14 @@ async fn handle_client(mut stream: TcpStream, mut rx: Receiver<TMessage>) -> any
             }
 
             // message from load balancing table lookup
+            // forward to the worker
             Some(message) = rx.recv() => {
-                dbg!(message);
+                framed_writer.send(message).await?;
+
+                let mut client_map = client_map.lock().await;
+                let worker = client_map.get_mut(&client_id).unwrap();
+
+                worker.load += 1;
             }
 
             _ = interval.tick() => {

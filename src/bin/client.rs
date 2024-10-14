@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
 
     // Start a heartbeat interval
-    let mut interval = time::interval(Duration::from_millis(500)); // 500 ms
+    let mut interval = time::interval(Duration::from_millis(2000)); // 2000 ms
 
     loop {
         tokio::select! {
