@@ -1,8 +1,12 @@
+use std::time::Duration;
+
 use bytes::{Buf, Bytes, BytesMut};
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
+    time,
 };
+use futures::SinkExt;
 
 use thiserror::Error;
 use tokio_stream::StreamExt;
@@ -39,17 +43,36 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn handle_client(mut stream: TcpStream) -> anyhow::Result<()> {
+    // TODO: check can I use borrowed halves if no moves of half to spawn
+    let (read_half, write_half) = stream.into_split();
+
     // wrap stream into a framed codec
-    let mut reader = LengthDelimitedCodec::builder()
+    let mut framed_reader = LengthDelimitedCodec::builder()
         // .length_field_offset(0)
         .length_field_type::<u16>()
         // .length_adjustment(2)
         // .num_skip(0)
-        .new_read(stream);
+        .new_read(read_half);
 
-    while let Some(Ok(message)) = reader.next().await {
-        dbg!(message);
+    // server heartbeat interval
+
+    let mut framed_writer = LengthDelimitedCodec::builder()
+        .length_field_type::<u16>()
+        .new_write(write_half);
+
+    let mut interval = time::interval(Duration::from_millis(500));
+
+    loop {
+        tokio::select! {
+            Some(Ok(message)) = framed_reader.next() => {
+                dbg!(message);
+            }
+
+            _ = interval.tick() => {
+                println!("heartbeat Coordinator -> Worker");
+                let frame = Bytes::from("coordinator alive");
+                framed_writer.send(frame).await?;
+            }
+        }
     }
-    Ok(())
 }
-
