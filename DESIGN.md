@@ -160,6 +160,8 @@ As corresponding, the coordinator needs to:
 - Assign mission: send mission Id to the lowest load worker, and change the mission state to assigning. When worker reply with on processing, coordinator update state to "running".
 - Mission complete: worker will send a message when mission complete, the coordinator need then update the process state to complete (delete from list).
 
+TBD: whether coordinator needs to keep heartbeat and notify workers it is alive to update the booking?
+
 #### Data frame and serialization
 
 - **Decision**: framed data (if rust, using `codec`, if python using `asyncio` stream). 

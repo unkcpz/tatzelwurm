@@ -1,6 +1,3 @@
-use std::io::Cursor;
-
-use atoi::atoi;
 use bytes::{Buf, Bytes, BytesMut};
 use tokio::{
     io::AsyncReadExt,
@@ -8,6 +5,8 @@ use tokio::{
 };
 
 use thiserror::Error;
+use tokio_stream::StreamExt;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[derive(Error, Debug)]
 pub enum StreamError {
@@ -31,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
                 tokio::spawn(async move {
                     // TODO: process_stream shouldn't return, using tracing to recording logs and
                     // handling errors
-                    let _ = process_stream(socket).await;
+                    let _ = handle_client(socket).await;
                 });
             }
             Err(err) => println!("client cannot has connection established {err:?}"),
@@ -39,115 +38,18 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn process_stream(mut stream: TcpStream) -> anyhow::Result<()> {
-    use StreamError::InComplete;
+async fn handle_client(mut stream: TcpStream) -> anyhow::Result<()> {
+    // wrap stream into a framed codec
+    let mut reader = LengthDelimitedCodec::builder()
+        // .length_field_offset(0)
+        .length_field_type::<u16>()
+        // .length_adjustment(2)
+        // .num_skip(0)
+        .new_read(stream);
 
-    let mut buf = BytesMut::with_capacity(1024);
-
-    loop {
-        // TODO: deal with read timeout
-        // wrap in cursor to seek the len to advance and discard
-        let mut src = Cursor::new(&buf[..]);
-
-        match check_frame(&mut src) {
-            Ok(()) => {
-                // since check frame will move cursor position forward,
-                // I store the position for advancing buffer to discard.
-                let len = src.position();
-
-                // reset seek pos to 0 to parse
-                src.set_position(0);
-                let frame = parse_frame(&mut src);
-
-                dbg!(frame);
-
-                // discard bytes that already read
-                buf.advance(len as usize);
-            }
-            Err(InComplete) => {}
-            Err(err) => anyhow::bail!("check frame failed, {err}"),
-        }
-
-        match stream.read_buf(&mut buf).await {
-            Ok(0) => {
-                if buf.is_empty() {
-                    break;
-                }
-            }
-            Ok(_) => {}
-            Err(err) => anyhow::bail!("unable to handle stream, {err:?}"),
-        }
+    while let Some(Ok(message)) = reader.next().await {
+        dbg!(message);
     }
     Ok(())
 }
 
-fn get_u8(src: &mut Cursor<&[u8]>) -> Result<u8, StreamError> {
-    if !src.has_remaining() {
-        return Err(StreamError::InComplete);
-    }
-
-    Ok(src.get_u8())
-}
-
-fn check_frame(src: &mut Cursor<&[u8]>) -> Result<(), StreamError> {
-    // TODO: deal with src already empty
-    match get_u8(src)? {
-        b'$' => {
-            // bulk string https://redis.io/docs/latest/develop/reference/protocol-spec/#bulk-strings
-            let line = get_line(src)?;
-            let len = atoi::<usize>(line)
-                .ok_or_else(|| StreamError::ParseError(Bytes::from(line.to_owned())))?;
-
-            if src.remaining() < len + 2 {
-                return Err(StreamError::InComplete);
-            }
-
-            src.advance(len + 2);
-
-            Ok(())
-        }
-        b => Err(StreamError::UnknownType(b)),
-    }
-}
-
-fn get_line<'a>(src: &mut Cursor<&'a [u8]>) -> Result<&'a [u8], StreamError> {
-    let start = src.position() as usize;
-    let end = src.get_ref().len() - 1;
-
-    for i in start..end {
-        if src.get_ref()[i] == b'\r' && src.get_ref()[i + 1] == b'\n' {
-            // step and consume in cursor
-            src.set_position((i + 2) as u64);
-
-            return Ok(&src.get_ref()[start..i]);
-        }
-    }
-
-    Err(StreamError::InComplete)
-}
-
-// TODO: depend on use case maybe no need to use different frame type
-// Now the idea is borrowed from redis.
-#[derive(Debug)]
-enum Frame {
-    BulkString(Bytes),
-}
-
-fn parse_frame(src: &mut Cursor<&[u8]>) -> Result<Frame, StreamError> {
-    match src.get_u8() {
-        b'$' => {
-            let line = get_line(src)?;
-            let len = atoi::<usize>(line)
-                .ok_or_else(|| StreamError::ParseError(Bytes::from(line.to_owned())))?;
-
-            if src.remaining() < len + 2 {
-                return Err(StreamError::InComplete);
-            }
-
-            let data = Bytes::copy_from_slice(&src.chunk()[..len]);
-
-            Ok(Frame::BulkString(data))
-        }
-        _ => todo!(),
-    }
-}
