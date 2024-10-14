@@ -1,16 +1,18 @@
 use std::time::Duration;
 
 use bytes::{Buf, Bytes, BytesMut};
+use futures::SinkExt;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, TcpStream},
     time,
 };
-use futures::SinkExt;
 
 use thiserror::Error;
 use tokio_stream::StreamExt;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::{Framed, FramedRead, FramedWrite, LengthDelimitedCodec};
+
+use tatzelwurm::{Codec, TMessage};
 
 #[derive(Error, Debug)]
 pub enum StreamError {
@@ -46,19 +48,8 @@ async fn handle_client(mut stream: TcpStream) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 
-    // wrap stream into a framed codec
-    let mut framed_reader = LengthDelimitedCodec::builder()
-        // .length_field_offset(0)
-        .length_field_type::<u16>()
-        // .length_adjustment(2)
-        // .num_skip(0)
-        .new_read(read_half);
-
-    // server heartbeat interval
-
-    let mut framed_writer = LengthDelimitedCodec::builder()
-        .length_field_type::<u16>()
-        .new_write(write_half);
+    let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
+    let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
 
     let mut interval = time::interval(Duration::from_millis(500));
 
@@ -70,8 +61,11 @@ async fn handle_client(mut stream: TcpStream) -> anyhow::Result<()> {
 
             _ = interval.tick() => {
                 println!("heartbeat Coordinator -> Worker");
-                let frame = Bytes::from("coordinator alive");
-                framed_writer.send(frame).await?;
+                let message = TMessage {
+                    id: 4,
+                    content: "server alive".to_owned(),
+                };
+                framed_writer.send(message).await?;
             }
         }
     }
