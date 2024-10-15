@@ -12,6 +12,17 @@ pub struct TMessage {
     pub content: String,
 }
 
+impl TMessage {
+
+    #[must_use]
+    pub fn new(content: &str) -> Self {
+        Self {
+            id: 0,
+            content: content.to_owned(),
+        }
+    }
+}
+
 // A custom CodeC that handles de/serialize messagepack data
 pub struct Codec<T> {
     _marker: PhantomData<T>,

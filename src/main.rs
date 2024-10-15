@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use tokio_stream::StreamExt;
-use tokio_util::codec::{FramedRead, FramedWrite};
+use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use uuid::Uuid;
 
 use tatzelwurm::mission::dispatch;
@@ -19,6 +19,41 @@ use tatzelwurm::{
     codec::{Codec, TMessage},
     worker::{ClientMap, Worker},
 };
+
+enum Client {
+    Worker { id: u32, stream: TcpStream },
+    Actioner { id: u32, stream: TcpStream },
+}
+
+// Perform handshake, decide client type (worker or actioner) and protocol (always messagepack)
+// XXX: hyperequeue seems doesn't have handshake stage, how??
+async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
+    let mut frame = Framed::new(stream, Codec::<TMessage>::new());
+
+    let message = TMessage::new("Who you are?");
+    frame.send(message).await?;
+
+
+    let client = if let Some(Ok(message)) = frame.next().await {
+        dbg!(&message);
+        match message {
+            TMessage { content: ref c, .. } if c == "worker" => {
+                frame.send(TMessage::new("Go")).await?;
+                let stream = frame.into_inner();
+                Client::Worker { id: 0, stream }
+            }
+            TMessage { content: ref c, .. } if c == "actioner" => {
+                let stream = frame.into_inner();
+                Client::Actioner { id: 0, stream }
+            }
+            _ => anyhow::bail!("unknown client: {message:#?}")
+        }
+    } else {
+        anyhow::bail!("fail handshake");
+    };
+
+    Ok(client)
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,12 +72,18 @@ async fn main() -> anyhow::Result<()> {
                 // TODO: spawn task for handling every client
                 println!("Client listen on: {addr}");
 
-                let client_map_clone = Arc::clone(&client_map);
-                tokio::spawn(async move {
-                    // TODO: process_stream shouldn't return, using tracing to recording logs and
-                    // handling errors
-                    let _ = handle_client(stream, client_map_clone).await;
-                });
+                match handshake(stream).await {
+                    Ok(Client::Worker { stream, .. }) => {
+                        let client_map_clone = Arc::clone(&client_map);
+                        tokio::spawn(async move {
+                            // TODO: process_stream shouldn't return, using tracing to recording logs and
+                            // handling errors
+                            let _ = handle_client(stream, client_map_clone).await;
+                        });
+                    }
+                    _ => {todo!()}
+                }
+
             }
             Err(err) => println!("client cannot has connection established {err:?}"),
         }
