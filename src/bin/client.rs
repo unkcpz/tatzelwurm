@@ -1,16 +1,14 @@
 use std::time::Duration;
 
-use bytes::Bytes;
 use futures::SinkExt;
+use tatzelwurm::codec::{Codec, TMessage};
+use tokio::{net::TcpStream, time};
 use tokio_stream::StreamExt;
-use tokio::{io::AsyncWriteExt, net::TcpStream, time};
-use tokio_util::codec::{Framed, FramedRead, FramedWrite, LengthDelimitedCodec};
-
-use tatzelwurm::{TMessage, Codec};
+use tokio_util::codec::{FramedRead, FramedWrite};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut stream = TcpStream::connect("127.0.0.1:5677").await?;
+    let stream = TcpStream::connect("127.0.0.1:5677").await?;
     println!("Connected to coordinator");
 
     let (read_half, write_half) = stream.into_split();
