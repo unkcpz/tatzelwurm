@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     // spawn a load balance lookup task and send process to run on worker
     let client_map_clone = Arc::clone(&client_map);
     tokio::spawn(async move {
-        load_balancing(client_map_clone).await;
+        let _ = mission_dispatch(client_map_clone).await;
     });
 
     loop {
@@ -48,21 +48,11 @@ async fn main() -> anyhow::Result<()> {
                 // TODO: spawn task for handling every client
                 println!("Client listen on: {addr}");
 
-                // TODO: The handshake is the guardian for security, the authentication should
-                // happend here.
-                let client_id = Uuid::new_v4();
-
-                // XXX: for demo, always attach mpsc channel at the moment for all types of clients.
-
-                let (tx, rx) = mpsc::channel(100);
-                let worker = Worker { tx, load: 0 };
-                client_map.lock().await.insert(client_id, worker);
-
                 let client_map_clone = Arc::clone(&client_map);
                 tokio::spawn(async move {
                     // TODO: process_stream shouldn't return, using tracing to recording logs and
                     // handling errors
-                    let _ = handle_client(stream, rx, client_id, client_map_clone).await;
+                    let _ = handle_client(stream, client_map_clone).await;
                 });
             }
             Err(err) => println!("client cannot has connection established {err:?}"),
@@ -71,16 +61,21 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // TODO: TBD if using least loaded. If the type of process is tagged.
-async fn load_balancing(client_map: ClientMap) -> anyhow::Result<()> {
+// There should be two ways to trigger the mission dispatch,
+// - one by clocking,
+// - one by triggering from notifier.
+// The notifier is function that called when it is sure the mission table state changed.
+async fn mission_dispatch(client_map: ClientMap) -> anyhow::Result<()> {
     let mut interval = time::interval(Duration::from_millis(2000));
 
     loop {
         interval.tick().await;
-        dbg!(&client_map);
+        // dbg!(&client_map);
 
         async {
             if let Some(act_on) = client_map
-                .lock().await
+                .lock()
+                .await
                 .iter()
                 .min_by_key(|&(_, client)| client.load)
                 .map(|(&uuid, worker)| (uuid, worker))
@@ -98,11 +93,12 @@ async fn load_balancing(client_map: ClientMap) -> anyhow::Result<()> {
             } else {
                 println!("no worker yet.");
             }
-        }.await;
+        }
+        .await;
     }
 }
 
-async fn handle_client(stream: TcpStream, mut rx: Receiver<TMessage>, client_id: Uuid, client_map: ClientMap) -> anyhow::Result<()> {
+async fn handle_client(stream: TcpStream, client_map: ClientMap) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 
@@ -111,14 +107,30 @@ async fn handle_client(stream: TcpStream, mut rx: Receiver<TMessage>, client_id:
 
     let mut interval = time::interval(Duration::from_millis(2000));
 
+    // TODO: The handshake is the guardian for security, the authentication should
+    // happend here.
+    let client_id = Uuid::new_v4();
+
+    let (tx, mut rx) = mpsc::channel(100);
+    let worker = Worker { tx, load: 0 };
+    client_map.lock().await.insert(client_id, worker);
+
+    // XXX: different client type: (1) worker (2) actor from handshaking
     loop {
         tokio::select! {
             // message from worker client
+            // this contains heartbeat (only access table when worker dead, the mission then
+            // re-dispateched to other live worker. It should handle timeout for bad network condition,
+            // but that can be complex, not under consideration in the POC implementation)
+            // TODO:
+            // - should reported from worker when the mission is finished
+            // - should also get information from worker complain about the long running
+            // block process if it runs on non-block worker.
             Some(Ok(message)) = framed_reader.next() => {
                 dbg!(message);
             }
 
-            // message from load balancing table lookup
+            // message from mission dispatch table lookup
             // forward to the worker
             Some(message) = rx.recv() => {
                 framed_writer.send(message).await?;
