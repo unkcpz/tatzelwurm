@@ -22,4 +22,8 @@ path = "src/main.rs"
 
 [[bin]]
 name = "worker"
-path = "src/bin/client.rs"
+path = "src/bin/worker.rs"
+
+[[bin]]
+name = "actioner"
+path = "src/bin/actioner.rs"

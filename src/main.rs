@@ -33,7 +33,6 @@ async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
     let message = TMessage::new("Who you are?");
     frame.send(message).await?;
 
-
     let client = if let Some(Ok(message)) = frame.next().await {
         dbg!(&message);
         match message {
@@ -43,10 +42,11 @@ async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
                 Client::Worker { id: 0, stream }
             }
             TMessage { content: ref c, .. } if c == "actioner" => {
+                frame.send(TMessage::new("Go")).await?;
                 let stream = frame.into_inner();
                 Client::Actioner { id: 0, stream }
             }
-            _ => anyhow::bail!("unknown client: {message:#?}")
+            _ => anyhow::bail!("unknown client: {message:#?}"),
         }
     } else {
         anyhow::bail!("fail handshake");
@@ -78,19 +78,28 @@ async fn main() -> anyhow::Result<()> {
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
-                            let _ = handle_client(stream, client_map_clone).await;
+                            let _ = handle_worker(stream, client_map_clone).await;
                         });
                     }
-                    _ => {todo!()}
+                    Ok(Client::Actioner { stream, .. }) => {
+                        let client_map_clone = Arc::clone(&client_map);
+                        tokio::spawn(async move {
+                            // TODO: process_stream shouldn't return, using tracing to recording logs and
+                            // handling errors
+                            let _ = handle_actioner(stream, client_map_clone).await;
+                        });
+                    }
+                    _ => {
+                        todo!()
+                    }
                 }
-
             }
             Err(err) => println!("client cannot has connection established {err:?}"),
         }
     }
 }
 
-async fn handle_client(stream: TcpStream, client_map: ClientMap) -> anyhow::Result<()> {
+async fn handle_worker(stream: TcpStream, client_map: ClientMap) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 
@@ -141,6 +150,30 @@ async fn handle_client(stream: TcpStream, client_map: ClientMap) -> anyhow::Resu
                 };
                 framed_writer.send(message).await?;
             }
+        }
+    }
+}
+
+async fn handle_actioner(stream: TcpStream, client_map: ClientMap) -> anyhow::Result<()> {
+    // TODO: check can I use borrowed halves if no moves of half to spawn
+    let (read_half, write_half) = stream.into_split();
+
+    let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
+    let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
+
+    loop {
+        // message from worker client
+        // this contains heartbeat (only access table when worker dead, the mission then
+        // re-dispateched to other live worker. It should handle timeout for bad network condition,
+        // but that can be complex, not under consideration in the POC implementation)
+        // TODO:
+        // - should reported from worker when the mission is finished
+        // - should also get information from worker complain about the long running
+        // block process if it runs on non-block worker.
+        if let Some(Ok(message)) = framed_reader.next().await {
+            let msg = message.content;
+            let resp_msg = TMessage::new(format!("Shutup, I heard you say '{msg}'").as_str());
+            framed_writer.send(resp_msg).await?;
         }
     }
 }
