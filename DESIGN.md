@@ -174,6 +174,25 @@ The MessagePack is like JSON but a binary message which can be more efficient in
 If in future we find the message between clients and coordinator is always simple, we can change to using self designed protocol such as redis-like protocol.
 If we find in the future we need more big chunk of data to communicate, the MessagePack can fit for storing more complicate format.
 
+#### How to deal with missions when worker is "dead"
+
+Related isuses: https://github.com/aiidateam/aiida-core/issues/5278
+
+- (TBD) **Decision**: implement the lease for simplicity which requires only logic in the communication level.
+
+The worker keep on sending heartbeat, when it missed one, coordinator can regard it as "dead".
+Then there is a problem that the worker may still hold the access to the remote resources and to the database. 
+Unexpected thing may happen if the mission is re-assigned to other worker at the same time.
+
+This is not a uncommon scenario in the distribution system design.
+I searched on the internet and it gives following solutions that we can keep on investigating and comparing:
+
+- leases: the coordinator can only send the mission to other worker when the original worker miss the heartbeat and the lease timeout expired.
+- task cancellation: when heartbeat missed, coordinator send cancellation to worker and worker need to gracefully cancel all running missions. 
+- quorum-based consensus protocol: (mentioned by ChatGPT, I don't understand how it works.)
+- Idempotency and atomic on resource manipulating: if the operations on resources (remote HPC or database) are idempotency, then it doesn't matter if the operations happen multiple times. But in AiiDA this is not guranteed especially for the remote calculations which may have two `sbatch` submit in the same folder (maybe I am wrong?). For the DB, the issue of duplicate output port as mentioned is exactly what happened.
+- tag and version on the operations: if the operation is not idempotency, then if same resource is manipulated by the different workers then giving version or tag to make sure it is not duplicately running same operation can be a solution, but this require the tag feature in the DB and in the transport plugin. 
+
 ### Experiments required before start
 
 These are collection and short summary of awswers from ChatGPT 4o, which give the hints for tools and technique stacks where I should look and clear the path before start.
