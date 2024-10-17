@@ -7,8 +7,9 @@ tatzelwurm is a lightweight persistent queue system to deal with local process c
 ## Progress
 
 - [x] Basic communication between coordinator and workers.
-- [ ] Basic communication between coordinator and actioner.
+- [x] Basic communication between coordinator and actioner.
 - [x] basic handshake to check the client type and to set the communication mode.
+- [ ] worker manage missions through channels (_launch, _kill).
 - [ ] in memory worker table.
 - [ ] in memory mission table.
 - [x] load balancing on assigning missions to workers. (pick least load worker)

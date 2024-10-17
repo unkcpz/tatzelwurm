@@ -1,5 +1,10 @@
 # Design
 
+> **Note:**: 
+> - "worker" and "runner" are used interchangeably.
+> - most of time "coordinator" is the "server".
+> - sometimes the "process" and "mission" is used interchangeably.
+
 ### When we say replace RMQ what we are talking about?
 
 In addition to the [AEP PR#30: Remove the dependence on RabbitMQ](https://github.com/aiidateam/AEP/pull/30)
@@ -66,7 +71,7 @@ For simplicity, the worker should first implemented in python as a `Worker` clas
 There is always a guy look into system from outside and try to make some action. 
 It is us the regular aiida user who is willing to launch, pause, resume, and kill the process.
 I call this role the actioner. 
-The actioner will send the operation through message to coordinator and coordinator then send (or broadcase) the message to workers.
+The actioner will send the operation through message to coordinator and coordinator then send (or broadcase) the message to workers and take actions to manipulate the processes.
 
 #### Two tables
 
@@ -90,7 +95,7 @@ Everytime the coordinator look at the booking it has some cost, thus too often b
 On the contrary, less often booking check will cause the missions not efficiently assigned and therefore jams the pipeline.
 To ensure the good rate of throughput and avoid leaving workers to unnessesary idle, the booking checking is happened in the following case:
 
-- when new mission is filed and coordinator aware of it.
+- when it is certain that the state of table is changed such as new process opened and process terminated.
 - in the certain interval it ask itself to chek the booking and keep things ongoing.
 
 It requires to benchmark the performance of booking check on a very big table and decide which should be the proper default interval for booking check.
@@ -192,6 +197,46 @@ I searched on the internet and it gives following solutions that we can keep on 
 - quorum-based consensus protocol: (mentioned by ChatGPT, I don't understand how it works.)
 - Idempotency and atomic on resource manipulating: if the operations on resources (remote HPC or database) are idempotency, then it doesn't matter if the operations happen multiple times. But in AiiDA this is not guranteed especially for the remote calculations which may have two `sbatch` submit in the same folder (maybe I am wrong?). For the DB, the issue of duplicate output port as mentioned is exactly what happened.
 - tag and version on the operations: if the operation is not idempotency, then if same resource is manipulated by the different workers then giving version or tag to make sure it is not duplicately running same operation can be a solution, but this require the tag feature in the DB and in the transport plugin. 
+
+#### Is rpc (and broadcast) really needed?
+
+- **Decision**: don't use rpc but asynchronous pipeline and let the worker manage processes.** 
+
+In legacy (current) `aiida-core`, during the lifetime of a mission (an aiida process), it has a rpc channel attached. 
+The rpc channel has worker side as server to respose the rpc calls from actioner which is the user's CLI.
+The only function registered on the rpc is the `message_reciever` which answer to three remote operations i.e. `kill`, `pause` and `play`.
+The rpc is a common pattern when differnt components require to interact with each other in an asynchronous manner, but misuse may lead to unclear code.
+
+In `aiida-core` use case, this rpc pattern is overkill.
+Instead, what we really need is a listener of the process that knows what operation to take for the process, depend on the message received. 
+This listener can skip runner and interact with coordinator (as legacy design where every process has a rpc subscriber to RMQ).
+This listener can interact with worker and let the worker to deal with communication with coordinator. 
+But is it possible to add more hierachy the communication logic?
+
+I think the better solution is having runner in between the process and coordinator to avoid coordinator have direct control of processes.
+
+In the POC of `aiida-process-coordinator`, it uses a dict to handle the signal to the specified process.
+It is possible (and I think it is better) to use channel for runner to manage sending signal to operate on the process.
+By using signal it futher decouple the runner and processes.
+
+The new design has pros and cons:
+- Pros 1: processes are grouped under runner which makes runner management (restart and cancellation) more robust.
+- Pros 2: coordinator get less load on monitoring processes and therefore can handle larger throughput. 
+- Cons 1: the runner has a bit more responsibility then before.
+- Cons 2: the broadcast should go runner by runner. 
+
+Let's look at the process kill operation as a typical example that reveal the new design is better.
+In legacy design, the kill signal directly send to process and process register the operation to the runner's event loop to be executed.
+The control flow goes from coordinator to deepest process and back to runner and then to process.
+In the new design, the kill signal send to runner, and the runner then manage the close of the process. 
+The control flow goes from coordinator -> runner -> process which is easy to reasoning and every two parts can be isolated to debug.
+
+#### Is pub/sub suitable for process launch and ack?
+
+(comming)
+
+- no, it is the source of RMQ 15mins limit.
+- use `mpsc` to get message from runner, use `oneshot` to send terminated signals (finish/killed) back.
 
 ### Experiments required before start
 

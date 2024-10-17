@@ -4,6 +4,8 @@ use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+// NOTE: This bin should be as simple as possible, since it will be replaced with python client
+// with using the comm API provided by the wurm.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let stream = TcpStream::connect("127.0.0.1:5677").await?;
@@ -30,6 +32,11 @@ async fn main() -> anyhow::Result<()> {
             anyhow::bail!("handshake fail");
         }
     }
+
+    // define the mission and then adding a mission to the table (and set the state to ready)
+    // This will define the mission and put the mission to some where accessable by the runner
+    // (in aiida it then will be a DB.)
+    let msg = Message::add_mission(Mission::new());
 
     let msg = TMessage::new("this is a message");
     framed_writer.send(msg).await?;
