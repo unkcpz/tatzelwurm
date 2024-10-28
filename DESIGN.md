@@ -274,6 +274,24 @@ The worker table can also changed if there are short running tasks that finish d
 The decision was made mostly for less table lookup and to make the assignment more easy to predict.
 For debug purpose, it is easy to just print out two tables and see if the assignment works as expected.
 
+#### Info to task to limit the maximum number to run on remote
+
+A very [old issue](https://github.com/aiidateam/aiida-core/issues/88) was not able to be solved because the lack of process assignment strategy.
+At the moment, there is no way to count the number of tasks are running on the remote resources. 
+When assigning the remote run task (`CalcJob` in AiiDA context) to worker, it requires to add a check on the limit amout of jobs are able to run on the remote.
+If such type of tasks exceed the limit, not task should be assigned to the worker until some tasks are completed later.
+
+#### Gracefully kill a task shutdown runner
+
+- [Issue #2985 not gracefully killed](https://github.com/aiidateam/aiida-core/issues/2985)
+- [Issue when only CMD interpreter runner closed](https://github.com/aiidateam/aiida-core/issues/2711)
+
+When task is killed, it requires to
+
+1. Go through all the sub-process and schedule cancelling coroutines.
+1. Change the DB record for the task (by aiida-core).
+1. When all cancelling finished, close the event loop and mark the process as killed in the table.
+
 ### Experiments required before start
 
 These are collection and short summary of awswers from ChatGPT 4o, which give the hints for tools and technique stacks where I should look and clear the path before start.
