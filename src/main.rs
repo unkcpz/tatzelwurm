@@ -14,11 +14,11 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use uuid::Uuid;
 
-use tatzelwurm::task::dispatch;
+use tatzelwurm::task::{dispatch, Task};
 use tatzelwurm::{
     codec::{Codec, TMessage},
-    worker::{self, Worker},
     task,
+    worker::{self, Worker},
 };
 
 enum Client {
@@ -86,12 +86,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(Client::Actioner { stream, .. }) => {
                         let worker_table_clone = Arc::clone(&worker_table);
-                        // BUG: when actioner exit, the connection is not closed properly.
-                        // which keeps a high CPU consuming process on coordinator.
+                        let task_table_clone = Arc::clone(&task_table);
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
-                            let _ = handle_actioner(stream, worker_table_clone).await;
+                            let _ =
+                                handle_actioner(stream, worker_table_clone, task_table_clone).await;
                         });
                     }
                     _ => {
@@ -160,26 +160,57 @@ async fn handle_worker(stream: TcpStream, worker_table: worker::Table) -> anyhow
     }
 }
 
-async fn handle_actioner(stream: TcpStream, worker_table: worker::Table) -> anyhow::Result<()> {
+async fn handle_actioner(
+    stream: TcpStream,
+    worker_table: worker::Table,
+    task_table: task::Table,
+) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 
     let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
     let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
 
-    loop {
-        // message from worker client
-        // this contains heartbeat (only access table when worker dead, the mission then
-        // re-dispateched to other live worker. It should handle timeout for bad network condition,
-        // but that can be complex, not under consideration in the POC implementation)
-        // TODO:
-        // - should reported from worker when the mission is finished
-        // - should also get information from worker complain about the long running
-        // block process if it runs on non-block worker.
-        if let Some(Ok(message)) = framed_reader.next().await {
-            let msg = message.content;
-            let resp_msg = TMessage::new(format!("Shutup, I heard you say '{msg}'").as_str());
-            framed_writer.send(resp_msg).await?;
+    // message from worker client
+    // this contains heartbeat (only access table when worker dead, the mission then
+    // re-dispateched to other live worker. It should handle timeout for bad network condition,
+    // but that can be complex, not under consideration in the POC implementation)
+    // TODO:
+    // - should reported from worker when the mission is finished
+    // - should also get information from worker complain about the long running
+    // block process if it runs on non-block worker.
+    if let Some(Ok(message)) = framed_reader.next().await {
+        let msg = message.content;
+
+        match msg.as_str() {
+            "inspect" => {
+                let resp_msg = TMessage::new(
+                    format!(
+                        "Good, I heard you say '{msg}' \n {worker_table:#?}, \n {task_table:#?}"
+                    )
+                    .as_str(),
+                );
+                framed_writer.send(resp_msg).await?;
+            }
+            // placeholder, add a random test task to table
+            "submit" => {
+                let mut task_table = task_table.lock().await;
+                let task = Task::new(0);
+                task_table.insert(Uuid::new_v4(), task);
+                let resp_msg = TMessage::new(
+                    format!(
+                        "Good, I heard you say '{msg}' \n {worker_table:#?}, \n {task_table:#?}"
+                    )
+                    .as_str(),
+                );
+                framed_writer.send(resp_msg).await?;
+            }
+            _ => {
+                let resp_msg = TMessage::new(format!("Shutup, I heard you say '{msg}'").as_str());
+                framed_writer.send(resp_msg).await?;
+            }
         }
     }
+
+    Ok(())
 }

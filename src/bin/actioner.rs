@@ -1,13 +1,24 @@
+use clap::Parser;
 use futures::SinkExt;
 use tatzelwurm::codec::{Codec, TMessage};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Operation to take
+    #[arg(short, long)]
+    operation: String,
+}
+
 // NOTE: This bin should be as simple as possible, since it will be replaced with python client
 // with using the comm API provided by the wurm.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
     let stream = TcpStream::connect("127.0.0.1:5677").await?;
     println!("Connected to coordinator");
 
@@ -38,8 +49,20 @@ async fn main() -> anyhow::Result<()> {
     // (in aiida it then will be a DB.)
     // let msg = Message::add_mission(Mission::new());
 
-    let msg = TMessage::new("this is a message");
-    framed_writer.send(msg).await?;
+    match args.operation.as_str() {
+        "inspect" => {
+            let msg = TMessage::new("inspect");
+            framed_writer.send(msg).await?;
+        }
+        "submit" => {
+            let msg = TMessage::new("submit");
+            framed_writer.send(msg).await?;
+        }
+        _ => {
+            let msg = TMessage::new("useless message");
+            framed_writer.send(msg).await?;
+        }
+    }
 
     if let Some(Ok(resp_msg)) = framed_reader.next().await {
         dbg!(resp_msg);

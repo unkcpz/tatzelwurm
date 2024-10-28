@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::{codec::TMessage, worker};
 
+#[derive(Debug)]
 enum State {
     Ready,
     Submiting,
@@ -13,10 +14,23 @@ enum State {
     Terminated,
 }
 
+#[derive(Debug)]
 pub struct Task {
     state: State,
     priority: u32,
     worker: Option<Uuid>,
+}
+
+impl Task {
+
+    #[must_use]
+    pub fn new(priority: u32) -> Self {
+        Self {
+            state: State::Ready,
+            priority,
+            worker: None,
+        }
+    } 
 }
 
 pub type Table = Arc<Mutex<HashMap<Uuid, Task>>>;
