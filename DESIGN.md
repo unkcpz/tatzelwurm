@@ -73,6 +73,31 @@ It is us the regular aiida user who is willing to launch, pause, resume, and kil
 I call this role the actioner. 
 The actioner will send the operation through message to coordinator and coordinator then send (or broadcase) the message to workers and take actions to manipulate the processes.
 
+#### Key Advantages of Rust Over Python
+
+In the initial goal of language design, rust was putting [fearless concurrency](https://blog.rust-lang.org/2015/04/10/Fearless-Concurrency.html) in its core.
+People from AiiDA team worked on engine were very suffered from debugging the `asyncio` more or less.
+
+Rust bring memory safety without GC.
+Memory issues are a major pain point in high-throughput systems, and Rust offers a unique advantage with its zero-cost abstractions for memory safety. 
+Rust’s borrow checker and ownership model prevent common errors like null pointer dereferencing, dangling pointers, and data races—all of which Python’s garbage collection cannot handle efficiently. 
+Rust eliminates these risks at compile-time, resulting in a more reliable and crash-resistant service.
+
+Rust's Concurrency scales with modern Multi-Core Systems
+With Rust, we gain access to high-performance asynchronous programming through frameworks like `Tokio`, which is highly optimized for I/O-bound tasks. 
+Python’s GIL (Global Interpreter Lock) inherently limits true parallel execution in most cases, leading to bottlenecks that severely hinder performance as load increases. 
+Rust’s async capabilities allow for parallelism without these limitations, ideal for network-intensive applications like our communication component.
+
+Rust has great error handling and stability
+Rust’s strict compile-time checks lead to a higher degree of confidence in error handling and code stability. 
+Rust doesn’t just allow developers to skip error handling, unlike Python where errors can bubble up silently, resulting in unhandled exceptions and potential system crashes. 
+By enforcing rigorous handling of potential failures, and ensures that our component will be robust, resilient, and dependable, even under heavy load.
+
+I can image peoplo may against it because they don't familiar with Rust and Rust is well-known for its deep learning curve.
+In order to write a package from scratch maybe difficult and requires a lot effort to learn to make mistakes.
+But read, understand and make further change should be easier with the clear design and the powerful async tools from tokio.
+We all speak English, to write a <Lord of the Rings> is impossible for every of us, but to read and write drived stories should not be a hard task.
+
 #### Two tables
 
 The coordinator should grab two tables to operate on its mission.
