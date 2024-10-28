@@ -1,6 +1,6 @@
 # tatzelwurm
 
-tatzelwurm is a lightweight persistent queue system to deal with local process calls and broadcast between coordinator and workers.
+tatzelwurm is a lightweight persistent queue system to deal with process calls and broadcast operations.
 
 - The design consideration is in [DESIGN.md](https://github.com/unkcpz/tatzelwurm/blob/main/DESIGN.md)
 
@@ -12,6 +12,7 @@ tatzelwurm is a lightweight persistent queue system to deal with local process c
 - [ ] worker manage missions through channels (_launch, _kill).
 - [ ] in memory worker table.
 - [ ] in memory mission table.
+- [ ] protocol for message transmission.
 - [x] load balancing on assigning missions to workers. (pick least load worker)
 - [ ] mission cancellation and re-assign.
 - [ ] mission type and priority deligate.

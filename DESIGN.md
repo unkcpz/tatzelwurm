@@ -238,6 +238,17 @@ The control flow goes from coordinator -> runner -> process which is easy to rea
 - no, it is the source of RMQ 15mins limit.
 - use `mpsc` to get message from runner, use `oneshot` to send terminated signals (finish/killed) back.
 
+#### One glimpse multiple tasks assignment
+
+When dispatch tasks to workers, there are two ways of updating worker table.
+First is after every task assignment, I check the worker table again to get the latest one and to assign task using the new table.
+Second is to do only one glimpse on the worker table and use this table to assign all the tasks in a loop.
+The different between two strategies are during the tasks assignement, the worker table will be update in-time.
+The worker table can also changed if there are short running tasks that finish during assignments. 
+
+The decision was made mostly for less table lookup and to make the assignment more easy to predict.
+For debug purpose, it is easy to just print out two tables and see if the assignment works as expected.
+
 ### Experiments required before start
 
 These are collection and short summary of awswers from ChatGPT 4o, which give the hints for tools and technique stacks where I should look and clear the path before start.

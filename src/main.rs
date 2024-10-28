@@ -14,10 +14,11 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use uuid::Uuid;
 
-use tatzelwurm::mission::dispatch;
+use tatzelwurm::task::dispatch;
 use tatzelwurm::{
     codec::{Codec, TMessage},
-    worker::{ClientMap, Worker},
+    worker::{self, Worker},
+    task,
 };
 
 enum Client {
@@ -58,12 +59,14 @@ async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:5677").await?;
-    let client_map: ClientMap = Arc::new(Mutex::new(HashMap::new()));
+    let worker_table: worker::Table = Arc::new(Mutex::new(HashMap::new()));
+    let task_table: task::Table = Arc::new(Mutex::new(HashMap::new()));
 
     // spawn a load balance lookup task and send process to run on worker
-    let client_map_clone = Arc::clone(&client_map);
+    let worker_table_clone = Arc::clone(&worker_table);
+    let task_table_clone = Arc::clone(&task_table);
     tokio::spawn(async move {
-        let _ = dispatch(client_map_clone).await;
+        let _ = dispatch(worker_table_clone, task_table_clone).await;
     });
 
     loop {
@@ -74,19 +77,21 @@ async fn main() -> anyhow::Result<()> {
 
                 match handshake(stream).await {
                     Ok(Client::Worker { stream, .. }) => {
-                        let client_map_clone = Arc::clone(&client_map);
+                        let worker_table_clone = Arc::clone(&worker_table);
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
-                            let _ = handle_worker(stream, client_map_clone).await;
+                            let _ = handle_worker(stream, worker_table_clone).await;
                         });
                     }
                     Ok(Client::Actioner { stream, .. }) => {
-                        let client_map_clone = Arc::clone(&client_map);
+                        let worker_table_clone = Arc::clone(&worker_table);
+                        // BUG: when actioner exit, the connection is not closed properly.
+                        // which keeps a high CPU consuming process on coordinator.
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
-                            let _ = handle_actioner(stream, client_map_clone).await;
+                            let _ = handle_actioner(stream, worker_table_clone).await;
                         });
                     }
                     _ => {
@@ -99,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn handle_worker(stream: TcpStream, client_map: ClientMap) -> anyhow::Result<()> {
+async fn handle_worker(stream: TcpStream, worker_table: worker::Table) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 
@@ -115,7 +120,7 @@ async fn handle_worker(stream: TcpStream, client_map: ClientMap) -> anyhow::Resu
     // XXX: different client type: (1) worker (2) actioner from handshaking
     let (tx, mut rx) = mpsc::channel(100);
     let worker = Worker { tx, load: 0 };
-    client_map.lock().await.insert(client_id, worker);
+    worker_table.lock().await.insert(client_id, worker);
 
     loop {
         tokio::select! {
@@ -131,13 +136,14 @@ async fn handle_worker(stream: TcpStream, client_map: ClientMap) -> anyhow::Resu
                 dbg!(message);
             }
 
-            // message from mission dispatch table lookup
-            // forward to the worker
+            // message from task dispatch table lookup
+            // forward to the real worker client
+            // then update the worker booking
             Some(message) = rx.recv() => {
                 framed_writer.send(message).await?;
 
-                let mut client_map = client_map.lock().await;
-                let worker = client_map.get_mut(&client_id).unwrap();
+                let mut worker_table = worker_table.lock().await;
+                let worker = worker_table.get_mut(&client_id).unwrap();
 
                 worker.load += 1;
             }
@@ -154,7 +160,7 @@ async fn handle_worker(stream: TcpStream, client_map: ClientMap) -> anyhow::Resu
     }
 }
 
-async fn handle_actioner(stream: TcpStream, client_map: ClientMap) -> anyhow::Result<()> {
+async fn handle_actioner(stream: TcpStream, worker_table: worker::Table) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 

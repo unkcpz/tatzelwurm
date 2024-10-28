@@ -16,5 +16,5 @@ pub struct Worker {
 }
 
 // XXX: use tokio Mutex or sync Mutex?
-pub type ClientMap = Arc<Mutex<HashMap<Uuid, Worker>>>;
+pub type Table = Arc<Mutex<HashMap<Uuid, Worker>>>;
 

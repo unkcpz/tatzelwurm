@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     // define the mission and then adding a mission to the table (and set the state to ready)
     // This will define the mission and put the mission to some where accessable by the runner
     // (in aiida it then will be a DB.)
-    let msg = Message::add_mission(Mission::new());
+    // let msg = Message::add_mission(Mission::new());
 
     let msg = TMessage::new("this is a message");
     framed_writer.send(msg).await?;
