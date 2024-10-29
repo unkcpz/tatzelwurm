@@ -4,23 +4,31 @@ use bytes::{Buf, BufMut};
 use rmp_serde::{encode, Deserializer};
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
+use uuid::Uuid;
 
-// TODO: should look at rmp-rpc, see if use it or re-implement
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TMessage {
-    pub id: u32,
-    pub content: String,
+pub enum Operation {
+    Inspect,
+    Submit,
 }
 
-impl TMessage {
+// TODO: should look at rmp-rpc, see if use it or re-implement as same way
+#[derive(Serialize, Deserialize, Debug)]
+pub enum XMessage {
+    // for fallback general unknown type messages
+    Message {id: u32, content: String},
 
-    #[must_use]
-    pub fn new(content: &str) -> Self {
-        Self {
-            id: 0,
-            content: content.to_owned(),
-        }
-    }
+    // The Uuid is the task uuid
+    TaskDispatch(Uuid), 
+
+    // hand shake message when the msg content is a string
+    HandShake(String),
+
+    // Heartbeat with the port as identifier
+    HeartBeat(u16),
+
+    // Operations from actioner
+    ActionerOp(Operation),
 }
 
 // A custom CodeC that handles de/serialize messagepack data

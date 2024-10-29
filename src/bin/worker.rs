@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use futures::SinkExt;
 use rand::{self, Rng};
-use tatzelwurm::codec::{Codec, TMessage};
+use tatzelwurm::codec::{Codec, XMessage};
+use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::{
-    io::AsyncWriteExt,
     net::TcpStream,
     sync::oneshot,
     time::{self, sleep},
@@ -33,32 +33,49 @@ fn run_task_with_ack() -> oneshot::Receiver<()> {
     ack_rx
 }
 
+async fn handshake<'a>(rhalf: &mut ReadHalf<'a>, whalf: &mut WriteHalf<'a>) -> anyhow::Result<()> {
+    let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
+    let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
+
+    loop {
+        if let Some(Ok(message)) = framed_reader.next().await {
+            match message {
+                XMessage::HandShake(info) => match info.as_str() {
+                    "Go" => {
+                        println!("handshake successful!");
+                        break;
+                    }
+                    "Who you are?" => {
+                        framed_writer
+                            .send(XMessage::HandShake("worker".to_string()))
+                            .await?;
+                    }
+                    _ => eprintln!("unknown handshake info: {info}"),
+                },
+                _ => eprintln!("unknown message: {message:#?}"),
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let stream = TcpStream::connect("127.0.0.1:5677").await?;
+    let mut stream = TcpStream::connect("127.0.0.1:5677").await?;
     println!("Connected to coordinator");
 
-    let (read_half, write_half) = stream.into_split();
+    let socket_addr = stream.local_addr()?;
 
-    let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
-    let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
+    let (mut rhalf, mut whalf) = stream.split();
 
-    if let Some(Ok(message)) = framed_reader.next().await {
-        if message.content == "Who you are?" {
-            framed_writer.send(TMessage::new("worker")).await?;
-        } else {
-            eprintln!("unknown message: {message:#?}");
-        }
+    if let Err(err) = handshake(&mut rhalf, &mut whalf).await {
+        anyhow::bail!(err);
     }
 
-    if let Some(Ok(message)) = framed_reader.next().await {
-        if message.content == "Go" {
-            println!("handshake successful!");
-        } else {
-            framed_writer.get_mut().shutdown().await?;
-            anyhow::bail!("handshake fail");
-        }
-    }
+
+    let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
+    let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
 
     // Start a heartbeat interval
     let mut interval = time::interval(Duration::from_millis(2000)); // 2000 ms
@@ -67,30 +84,28 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             Some(Ok(message)) = framed_reader.next() => {
                 match message {
-                    TMessage { id: 1003, .. } => {
-                        framed_writer.send(TMessage::new("I got a task!! run it man!!")).await?;
-                        let msg = TMessage {
-                            id: 8,
-                            content: "running".to_owned(),
-                        };
+                    XMessage::TaskDispatch(id) => {
+                        framed_writer.send(
+                            XMessage::Message {
+                                content: format!("I got the task {id}, Sir! Working on it!"), 
+                                id: 0
+                            }).await?;
+                        let msg = XMessage::Message { id: 8, content: "running".to_string() };
                         framed_writer.send(msg).await?;
 
                         let ack_rx = run_task_with_ack();
 
                         if let Ok(()) = ack_rx.await {
-                                let msg = TMessage {
-                                    id: 6,
-                                    content: "complete".to_owned(),
-                                };
-                                framed_writer.send(msg).await?;
-                        }
-                        else {
-                            let msg = TMessage {
-                                id: 7,
-                                content: "except".to_owned(),
-                            };
+                            let msg = XMessage::Message { id: 6, content: "complete".to_string() };
                             framed_writer.send(msg).await?;
                         }
+                        else {
+                            let msg = XMessage::Message { id: 7, content: "except".to_string() };
+                            framed_writer.send(msg).await?;
+                        }
+                    }
+                    XMessage::HeartBeat(port) => {
+                        println!("coordinator {port} alive!");
                     }
                     _ => {
                         println!("worker.rs narrate {message:?}");
@@ -100,11 +115,7 @@ async fn main() -> anyhow::Result<()> {
 
             _ = interval.tick() => {
                 println!("Sending heartbeat to server");
-                let message = TMessage {
-                    id: 5,
-                    content: "client alive".to_owned(),
-                };
-                framed_writer.send(message).await?;
+                framed_writer.send(XMessage::HeartBeat(socket_addr.port())).await?;
             }
         }
     }

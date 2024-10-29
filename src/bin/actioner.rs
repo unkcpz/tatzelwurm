@@ -1,7 +1,9 @@
 use clap::Parser;
 use futures::SinkExt;
-use tatzelwurm::codec::{Codec, TMessage};
-use tokio::{io::AsyncWriteExt, net::TcpStream};
+use tatzelwurm::codec::Operation::{Inspect, Submit};
+use tatzelwurm::codec::{Codec, XMessage};
+use tokio::net::tcp::{ReadHalf, WriteHalf};
+use tokio::net::TcpStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
@@ -13,36 +15,52 @@ struct Args {
     operation: String,
 }
 
+// TODO: this can be generic as a client method and used together with worker and even as interface
+// for other language client.
+async fn handshake<'a>(rhalf: &mut ReadHalf<'a>, whalf: &mut WriteHalf<'a>) -> anyhow::Result<()> {
+    let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
+    let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
+
+    loop {
+        if let Some(Ok(message)) = framed_reader.next().await {
+            match message {
+                XMessage::HandShake(info) => match info.as_str() {
+                    "Go" => {
+                        println!("handshake successful!");
+                        break;
+                    }
+                    "Who you are?" => {
+                        framed_writer
+                            .send(XMessage::HandShake("actioner".to_string()))
+                            .await?;
+                    }
+                    _ => eprintln!("unknown handshake info: {info}"),
+                },
+                _ => eprintln!("unknown message: {message:#?}"),
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // NOTE: This bin should be as simple as possible, since it will be replaced with python client
 // with using the comm API provided by the wurm.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let stream = TcpStream::connect("127.0.0.1:5677").await?;
+    let mut stream = TcpStream::connect("127.0.0.1:5677").await?;
     println!("Connected to coordinator");
 
-    let (read_half, write_half) = stream.into_split();
+    let (mut rhalf, mut whalf) = stream.split();
 
-    let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
-    let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
-
-    if let Some(Ok(message)) = framed_reader.next().await {
-        if message.content == "Who you are?" {
-            framed_writer.send(TMessage::new("actioner")).await?;
-        } else {
-            eprintln!("unknown message: {message:#?}");
-        }
+    if let Err(err) = handshake(&mut rhalf, &mut whalf).await {
+        anyhow::bail!(err);
     }
 
-    if let Some(Ok(message)) = framed_reader.next().await {
-        if message.content == "Go" {
-            println!("handshake successful!");
-        } else {
-            framed_writer.get_mut().shutdown().await?;
-            anyhow::bail!("handshake fail");
-        }
-    }
+    let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
+    let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
 
     // define the mission and then adding a mission to the table (and set the state to ready)
     // This will define the mission and put the mission to some where accessable by the runner
@@ -51,16 +69,18 @@ async fn main() -> anyhow::Result<()> {
 
     match args.operation.as_str() {
         "inspect" => {
-            let msg = TMessage::new("inspect");
-            framed_writer.send(msg).await?;
+            framed_writer.send(XMessage::ActionerOp(Inspect)).await?;
         }
         "submit" => {
-            let msg = TMessage::new("submit");
-            framed_writer.send(msg).await?;
+            framed_writer.send(XMessage::ActionerOp(Submit)).await?;
         }
         _ => {
-            let msg = TMessage::new("useless message");
-            framed_writer.send(msg).await?;
+            framed_writer
+                .send(XMessage::Message {
+                    id: 0,
+                    content: "useless op".to_string(),
+                })
+                .await?;
         }
     }
 

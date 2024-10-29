@@ -4,7 +4,8 @@ use std::{collections::HashMap, time::Duration};
 use tokio::{sync::Mutex, time};
 use uuid::Uuid;
 
-use crate::{codec::TMessage, worker};
+use crate::codec::XMessage;
+use crate::worker;
 
 #[derive(Debug)]
 pub enum State {
@@ -23,7 +24,6 @@ pub struct Task {
 }
 
 impl Task {
-
     #[must_use]
     pub fn new(priority: u32) -> Self {
         Self {
@@ -32,7 +32,7 @@ impl Task {
             priority,
             worker: None,
         }
-    } 
+    }
 }
 
 pub type Table = Arc<Mutex<HashMap<Uuid, Task>>>;
@@ -73,11 +73,8 @@ pub async fn dispatch(worker_table: worker::Table, task_table: Table) -> anyhow:
                     let wuuid_ = act_by.0;
                     let worker = act_by.1;
 
-                    let message = TMessage {
-                        id: 1003,
-                        content: format!("task {tuuid_} processed by worker {wuuid_}"),
-                    };
-                    if let Err(e) = worker.tx.send(message).await {
+                    let xmessage = XMessage::TaskDispatch(*tuuid_);
+                    if let Err(e) = worker.tx.send(xmessage).await {
                         eprintln!("Failed to send message: {e}");
                     } else {
                         // TODO: require a ack from worker and then make the table change

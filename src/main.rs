@@ -14,11 +14,15 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use uuid::Uuid;
 
-use tatzelwurm::task::{dispatch, Task};
+use tatzelwurm::codec::Operation::{Inspect, Submit};
 use tatzelwurm::{
-    codec::{Codec, TMessage},
+    codec::Codec,
     task,
     worker::{self, Worker},
+};
+use tatzelwurm::{
+    codec::XMessage,
+    task::{dispatch, Task},
 };
 
 enum Client {
@@ -29,25 +33,29 @@ enum Client {
 // Perform handshake, decide client type (worker or actioner) and protocol (always messagepack)
 // XXX: hyperequeue seems doesn't have handshake stage, how??
 async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
-    let mut frame = Framed::new(stream, Codec::<TMessage>::new());
+    let mut frame = Framed::new(stream, Codec::<XMessage>::new());
 
-    let message = TMessage::new("Who you are?");
-    frame.send(message).await?;
+    frame
+        .send(XMessage::HandShake("Who you are?".to_string()))
+        .await?;
 
     let client = if let Some(Ok(message)) = frame.next().await {
         dbg!(&message);
         match message {
-            TMessage { content: ref c, .. } if c == "worker" => {
-                frame.send(TMessage::new("Go")).await?;
-                let stream = frame.into_inner();
-                Client::Worker { id: 0, stream }
-            }
-            TMessage { content: ref c, .. } if c == "actioner" => {
-                frame.send(TMessage::new("Go")).await?;
-                let stream = frame.into_inner();
-                Client::Actioner { id: 0, stream }
-            }
-            _ => anyhow::bail!("unknown client: {message:#?}"),
+            XMessage::HandShake(info) => match info.as_str() {
+                "worker" => {
+                    frame.send(XMessage::HandShake("Go".to_string())).await?;
+                    let stream = frame.into_inner();
+                    Client::Worker { id: 0, stream }
+                }
+                "actioner" => {
+                    frame.send(XMessage::HandShake("Go".to_string())).await?;
+                    let stream = frame.into_inner();
+                    Client::Actioner { id: 0, stream }
+                }
+                _ => anyhow::bail!("unknown client: {info:#?}"),
+            },
+            _ => anyhow::bail!("unknown message: {message:#?}"),
         }
     } else {
         anyhow::bail!("fail handshake");
@@ -74,19 +82,19 @@ async fn main() -> anyhow::Result<()> {
             Ok((stream, addr)) => {
                 // TODO: spawn task for handling every client
                 println!("Client listen on: {addr}");
+                let worker_table_clone = Arc::clone(&worker_table);
+                let task_table_clone = Arc::clone(&task_table);
 
                 match handshake(stream).await {
                     Ok(Client::Worker { stream, .. }) => {
-                        let worker_table_clone = Arc::clone(&worker_table);
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
-                            let _ = handle_worker(stream, worker_table_clone).await;
+                            let _ =
+                                handle_worker(stream, worker_table_clone, task_table_clone).await;
                         });
                     }
                     Ok(Client::Actioner { stream, .. }) => {
-                        let worker_table_clone = Arc::clone(&worker_table);
-                        let task_table_clone = Arc::clone(&task_table);
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
@@ -95,7 +103,10 @@ async fn main() -> anyhow::Result<()> {
                         });
                     }
                     _ => {
-                        todo!()
+                        // Hand shake failed, refuse connection and close stream
+                        eprintln!("Hand shake refuse for {addr}");
+                        // XXX: can not use mut since it is moved, how??
+                        // stream.shutdown().await?;
                     }
                 }
             }
@@ -104,12 +115,16 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn handle_worker(stream: TcpStream, worker_table: worker::Table) -> anyhow::Result<()> {
+async fn handle_worker(
+    stream: TcpStream,
+    worker_table: worker::Table,
+    task_table: task::Table,
+) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
     let (read_half, write_half) = stream.into_split();
 
-    let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
-    let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
+    let mut framed_reader = FramedRead::new(read_half, Codec::<XMessage>::new());
+    let mut framed_writer = FramedWrite::new(write_half, Codec::<XMessage>::new());
 
     let mut interval = time::interval(Duration::from_millis(2000));
 
@@ -135,17 +150,17 @@ async fn handle_worker(stream: TcpStream, worker_table: worker::Table) -> anyhow
             Some(Ok(message)) = framed_reader.next() => {
                 // dbg!(&message);
                 match message {
-                    TMessage { id: 4, .. } => {
-                        println!("server alive!");
+                    XMessage::HeartBeat(port) => {
+                        println!("worker {port} alive!");
                     }
-                    TMessage { id: 8, .. } => {
-                        framed_writer.send(TMessage::new("chhanging table to mark pro as running")).await?;
+                    XMessage::Message { id: 8, .. } => {
+                        framed_writer.send(XMessage::Message {content: "chhanging table to mark proc as running".to_string(), id: 8}).await?;
                     }
-                    TMessage { id: 6, .. } => {
-                        framed_writer.send(TMessage::new("changing table to mark proc as terminated (c)")).await?;
+                    XMessage::Message { id: 6, .. } => {
+                        framed_writer.send(XMessage::Message {content: "changing table to mark proc as terminated (c)".to_string(), id: 6}).await?;
                     }
-                    TMessage { id: 7, .. } => {
-                        framed_writer.send(TMessage::new("changing table to mark proc as terminated (e)")).await?;
+                    XMessage::Message { id: 7, .. } => {
+                        framed_writer.send(XMessage::Message {content: "changing table to mark proc as terminated (e)".to_string(), id: 7}).await?;
                     }
                     _ => {
                         println!("main.rs narrate {message:?}");
@@ -169,26 +184,22 @@ async fn handle_worker(stream: TcpStream, worker_table: worker::Table) -> anyhow
 
             _ = interval.tick() => {
                 println!("heartbeat Coordinator -> Worker");
-                let message = TMessage {
-                    id: 4,
-                    content: "server alive".to_owned(),
-                };
-                framed_writer.send(message).await?;
+                framed_writer.send(XMessage::HeartBeat(0)).await?;
             }
         }
     }
 }
 
 async fn handle_actioner(
-    stream: TcpStream,
+    mut stream: TcpStream,
     worker_table: worker::Table,
     task_table: task::Table,
 ) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
-    let (read_half, write_half) = stream.into_split();
+    let (read_half, write_half) = stream.split();
 
-    let mut framed_reader = FramedRead::new(read_half, Codec::<TMessage>::new());
-    let mut framed_writer = FramedWrite::new(write_half, Codec::<TMessage>::new());
+    let mut framed_reader = FramedRead::new(read_half, Codec::<XMessage>::new());
+    let mut framed_writer = FramedWrite::new(write_half, Codec::<XMessage>::new());
 
     // message from worker client
     // this contains heartbeat (only access table when worker dead, the mission then
@@ -198,34 +209,31 @@ async fn handle_actioner(
     // - should reported from worker when the mission is finished
     // - should also get information from worker complain about the long running
     // block process if it runs on non-block worker.
-    if let Some(Ok(message)) = framed_reader.next().await {
-        let msg = message.content;
-
-        match msg.as_str() {
-            "inspect" => {
-                let resp_msg = TMessage::new(
-                    format!(
-                        "Good, I heard you say '{msg}' \n {worker_table:#?}, \n {task_table:#?}"
-                    )
-                    .as_str(),
-                );
+    if let Some(Ok(msg)) = framed_reader.next().await {
+        match msg {
+            XMessage::ActionerOp(Inspect) => {
+                let resp_msg = XMessage::Message {
+                    id: 0,
+                    content: format!("Good, hear you, \n {worker_table:#?}, \n {task_table:#?} \n"),
+                };
                 framed_writer.send(resp_msg).await?;
             }
             // placeholder, add a random test task to table
-            "submit" => {
+            XMessage::ActionerOp(Submit) => {
                 let mut task_table = task_table.lock().await;
                 let task = Task::new(0);
                 task_table.insert(task.id, task);
-                let resp_msg = TMessage::new(
-                    format!(
-                        "Good, I heard you say '{msg}' \n {worker_table:#?}, \n {task_table:#?}"
-                    )
-                    .as_str(),
-                );
+                let resp_msg = XMessage::Message {
+                    id: 0,
+                    content: format!("Good, hear you, \n {worker_table:#?}, \n {task_table:#?} \n"),
+                };
                 framed_writer.send(resp_msg).await?;
             }
             _ => {
-                let resp_msg = TMessage::new(format!("Shutup, I heard you say '{msg}'").as_str());
+                let resp_msg = XMessage::Message {
+                    id: 0,
+                    content: format!("Shutup, I try to ignore you, since you say '{msg:#?}'"),
+                };
                 framed_writer.send(resp_msg).await?;
             }
         }
