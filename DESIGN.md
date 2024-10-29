@@ -26,7 +26,7 @@ Two parts require this `add_task_subscriber` interface.
 The related design pattern is:
 - [pub/sub](https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber).
 
-Not all but quite a lot are taken from:
+Not all but quite a bit are inspired by:
 
 - https://github.com/chrisjsewell/aiida-process-coordinator
 - https://github.com/chrisjsewell/aiida-process-coordinator/discussions/4
@@ -104,6 +104,28 @@ The coordinator should grab two tables to operate on its mission.
 The two tables are workers table which record the workers state information and the tasks table which record the states of tasks.
 
 Everytime when the coordinator "look at" two tables, it needs to make the decision on what operation needs to be take.
+
+#### Message types
+
+```rust
+#[derive(Serialize, Deserialize, Debug)]
+pub enum XMessage {
+    // for fallback general unknown type messages
+    Message {id: u32, content: String},
+
+    // The Uuid is the task uuid
+    TaskDispatch(Uuid), 
+
+    // hand shake message when the msg content is a string
+    HandShake(String),
+
+    // Heartbeat with the port as identifier
+    HeartBeat(u16),
+
+    // Operations from actioner
+    ActionerOp(Operation),
+}
+```
 
 #### Proactive mission assignment to workers
 
