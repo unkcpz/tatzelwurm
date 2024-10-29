@@ -309,3 +309,6 @@ Comments:
 - The key point to check is make sure not new thread is created for each coroutine but the thread/event_loop has the lifetime of worker (this is the new design after move from `tornado` to `asyncio` which can only support one event loop, so probably with handle thread by rust every process can again run on their own event loop??). 
 - It may also be possible (better) to turn the python coroutine into a rust future and then using tokio runtime to poll the future to complete. This require the crate `pyo3_asyncio` as bridge to pass python's coroutine to rust tokio runtime. 
 
+### TBD
+
+- Is it better to store checkpoint in a seperate table or even in a separate resource? 

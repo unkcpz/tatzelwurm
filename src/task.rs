@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{codec::TMessage, worker};
 
 #[derive(Debug)]
-enum State {
+pub enum State {
     Ready,
     Submiting,
     Running,
@@ -16,9 +16,10 @@ enum State {
 
 #[derive(Debug)]
 pub struct Task {
-    state: State,
-    priority: u32,
-    worker: Option<Uuid>,
+    pub id: Uuid,
+    pub state: State,
+    pub priority: u32,
+    pub worker: Option<Uuid>,
 }
 
 impl Task {
@@ -26,6 +27,7 @@ impl Task {
     #[must_use]
     pub fn new(priority: u32) -> Self {
         Self {
+            id: Uuid::new_v4(),
             state: State::Ready,
             priority,
             worker: None,
@@ -72,7 +74,7 @@ pub async fn dispatch(worker_table: worker::Table, task_table: Table) -> anyhow:
                     let worker = act_by.1;
 
                     let message = TMessage {
-                        id: 3,
+                        id: 1003,
                         content: format!("task {tuuid_} processed by worker {wuuid_}"),
                     };
                     if let Err(e) = worker.tx.send(message).await {

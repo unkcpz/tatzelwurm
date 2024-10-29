@@ -1,10 +1,37 @@
 use std::time::Duration;
 
 use futures::SinkExt;
+use rand::{self, Rng};
 use tatzelwurm::codec::{Codec, TMessage};
-use tokio::{io::AsyncWriteExt, net::TcpStream, time};
+use tokio::{
+    io::AsyncWriteExt,
+    net::TcpStream,
+    sync::oneshot,
+    time::{self, sleep},
+};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
+
+async fn perform_task() {
+    let x = {
+        let mut rng = rand::thread_rng();
+        rng.gen_range(1..10)
+    };
+    sleep(Duration::from_secs(x)).await;
+    println!("Task {x} complete!");
+}
+
+fn run_task_with_ack() -> oneshot::Receiver<()> {
+    let (ack_tx, ack_rx) = oneshot::channel();
+
+    // XXX: what is the different if this is not a spawned task?
+    tokio::spawn(async move {
+        perform_task().await;
+        let _ = ack_tx.send(());
+    });
+
+    ack_rx
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,7 +66,36 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             Some(Ok(message)) = framed_reader.next() => {
-                dbg!(message);
+                match message {
+                    TMessage { id: 1003, .. } => {
+                        framed_writer.send(TMessage::new("I got a task!! run it man!!")).await?;
+                        let msg = TMessage {
+                            id: 8,
+                            content: "running".to_owned(),
+                        };
+                        framed_writer.send(msg).await?;
+
+                        let ack_rx = run_task_with_ack();
+
+                        if let Ok(()) = ack_rx.await {
+                                let msg = TMessage {
+                                    id: 6,
+                                    content: "complete".to_owned(),
+                                };
+                                framed_writer.send(msg).await?;
+                        }
+                        else {
+                            let msg = TMessage {
+                                id: 7,
+                                content: "except".to_owned(),
+                            };
+                            framed_writer.send(msg).await?;
+                        }
+                    }
+                    _ => {
+                        println!("worker.rs narrate {message:?}");
+                    }
+                }
             }
 
             _ = interval.tick() => {
@@ -53,4 +109,3 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 }
-

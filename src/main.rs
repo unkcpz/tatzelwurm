@@ -133,15 +133,34 @@ async fn handle_worker(stream: TcpStream, worker_table: worker::Table) -> anyhow
             // - should also get information from worker complain about the long running
             // block process if it runs on non-block worker.
             Some(Ok(message)) = framed_reader.next() => {
-                dbg!(message);
+                // dbg!(&message);
+                match message {
+                    TMessage { id: 4, .. } => {
+                        println!("server alive!");
+                    }
+                    TMessage { id: 8, .. } => {
+                        framed_writer.send(TMessage::new("chhanging table to mark pro as running")).await?;
+                    }
+                    TMessage { id: 6, .. } => {
+                        framed_writer.send(TMessage::new("changing table to mark proc as terminated (c)")).await?;
+                    }
+                    TMessage { id: 7, .. } => {
+                        framed_writer.send(TMessage::new("changing table to mark proc as terminated (e)")).await?;
+                    }
+                    _ => {
+                        println!("main.rs narrate {message:?}");
+                    }
+                }
             }
 
             // message from task dispatch table lookup
-            // forward to the real worker client
+            // fast-forward to the real worker client
             // then update the worker booking
             Some(message) = rx.recv() => {
                 framed_writer.send(message).await?;
 
+                // TODO: this should move to above when get submit ack message
+                // v.v load -1 should happened when get complete ack message
                 let mut worker_table = worker_table.lock().await;
                 let worker = worker_table.get_mut(&client_id).unwrap();
 
@@ -196,7 +215,7 @@ async fn handle_actioner(
             "submit" => {
                 let mut task_table = task_table.lock().await;
                 let task = Task::new(0);
-                task_table.insert(Uuid::new_v4(), task);
+                task_table.insert(task.id, task);
                 let resp_msg = TMessage::new(
                     format!(
                         "Good, I heard you say '{msg}' \n {worker_table:#?}, \n {task_table:#?}"
