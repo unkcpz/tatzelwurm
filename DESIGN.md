@@ -25,6 +25,7 @@ Two parts require this `add_task_subscriber` interface.
 
 The related design pattern is:
 - [pub/sub](https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber).
+- [actor with tokio](https://ryhl.io/blog/actors-with-tokio/)
 
 Not all but quite a bit are inspired by:
 
@@ -333,4 +334,5 @@ Comments:
 
 ### TBD
 
-- Is it better to store checkpoint in a seperate table or even in a separate resource? 
+- Is it better to store checkpoint in a seperate (in legacy it is with process node) table or even in a separate resource? 
+- Who should create (create means initialize the instance, store it is the "DB" and set to the created state) the task? Coordinator or worker or actioner (in legacy it is actioner)?

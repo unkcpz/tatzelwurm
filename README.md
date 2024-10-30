@@ -13,6 +13,8 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 - [x] enum message with types for easy message transision and pattern match
 - [x] in memory worker table.
 - [x] in memory mission table.
+- [ ] mock the task pool
+- [ ] task pool mixed of sync/async tasks, benchmark throughput.
 - [ ] table management using actor model instead of using mutex.
 - [ ] protocol for message transmission.
 - [x] load balancing on assigning missions to workers. (pick least load worker)
@@ -26,4 +28,5 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 - [ ] stress test and handle the edge cases such as actors are over-loaded.
 - [ ] integrating to test with plumpy.
 - [ ] integrating to aiida-core.
-- [ ] settle all the todos (should do this frequently when it is proper timing)
+- [ ] settle all the todos (should do this frequently when it is at proper timing)
+- [ ] Polish the design note (should do this frequently when it is at proper timing)

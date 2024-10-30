@@ -13,6 +13,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
+use uuid::Uuid;
 
 async fn perform_task() {
     let x = {
@@ -86,40 +87,7 @@ async fn main() -> anyhow::Result<()> {
             Some(Ok(message)) = framed_reader.next() => {
                 match message {
                     XMessage::TaskDispatch(id) => {
-                        framed_writer.send(
-                            XMessage::Message {
-                                content: format!("I got the task {id}, Sir! Working on it!"),
-                                id: 0
-                            }).await?;
-                        let msg = XMessage::WorkerOp{
-                            op: Operation::Update, 
-                            id, 
-                            from: State::Submiting,
-                            to: State::Running,
-                        };
-                        framed_writer.send(msg).await?;
-
-                        let ack_rx = run_task_with_ack();
-
-                        if let Ok(()) = ack_rx.await {
-                            let msg = XMessage::WorkerOp{
-                                op: Operation::Update, 
-                                id, 
-                                from: State::Running,
-                                to: State::Terminated,
-                            };
-                            framed_writer.send(msg).await?;
-                        }
-                        else {
-                            // TODO: distinguish from the successful complete
-                            let msg = XMessage::WorkerOp{
-                                op: Operation::Update, 
-                                id, 
-                                from: State::Running,
-                                to: State::Terminated,
-                            };
-                            framed_writer.send(msg).await?;
-                        }
+                        run_task(id, &mut framed_reader, &mut framed_writer).await?;
                     }
                     XMessage::HeartBeat(port) => {
                         println!("coordinator {port} alive!");
@@ -136,4 +104,47 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+async fn run_task<'a>(
+    id: Uuid,
+    framed_reader: &mut FramedRead<ReadHalf<'a>, Codec<XMessage>>,
+    framed_writer: &mut FramedWrite<WriteHalf<'a>, Codec<XMessage>>,
+) -> anyhow::Result<()> {
+    framed_writer
+        .send(XMessage::Message {
+            content: format!("I got the task {id}, Sir! Working on it!"),
+            id: 0,
+        })
+        .await?;
+    let msg = XMessage::WorkerOp {
+        op: Operation::Update,
+        id,
+        from: State::Submiting,
+        to: State::Running,
+    };
+    framed_writer.send(msg).await?;
+
+    let ack_rx = run_task_with_ack();
+
+    if let Ok(()) = ack_rx.await {
+        let msg = XMessage::WorkerOp {
+            op: Operation::Update,
+            id,
+            from: State::Running,
+            to: State::Terminated,
+        };
+        framed_writer.send(msg).await?;
+    } else {
+        // TODO: distinguish from the successful complete
+        let msg = XMessage::WorkerOp {
+            op: Operation::Update,
+            id,
+            from: State::Running,
+            to: State::Terminated,
+        };
+        framed_writer.send(msg).await?;
+    }
+
+    Ok(())
 }
