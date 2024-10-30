@@ -6,10 +6,18 @@ use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
 use uuid::Uuid;
 
+use crate::task::State;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Operation {
     Inspect,
     Submit,
+
+    // CURD to the table (s)
+    Create,
+    Update,
+    Read, // similar to Inspect
+    Delete, 
 }
 
 // TODO: should look at rmp-rpc, see if use it or re-implement as same way
@@ -29,6 +37,10 @@ pub enum XMessage {
 
     // Operations from actioner
     ActionerOp(Operation),
+
+    // Operations from worker
+    // XXX: may combine with the ActionerOp??
+    WorkerOp{ op: Operation, id: Uuid, from: State, to: State},
 }
 
 // A custom CodeC that handles de/serialize messagepack data

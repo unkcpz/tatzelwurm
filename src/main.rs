@@ -14,7 +14,7 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use uuid::Uuid;
 
-use tatzelwurm::codec::Operation::{Inspect, Submit};
+use tatzelwurm::{codec::Operation::{self, Inspect, Submit}, task::State};
 use tatzelwurm::{
     codec::Codec,
     task,
@@ -153,15 +153,26 @@ async fn handle_worker(
                     XMessage::HeartBeat(port) => {
                         println!("worker {port} alive!");
                     }
-                    XMessage::Message { id: 8, .. } => {
-                        framed_writer.send(XMessage::Message {content: "chhanging table to mark proc as running".to_string(), id: 8}).await?;
+                    XMessage::WorkerOp { op: Operation::Update, id, from: State::Submiting, to: State::Running } => {
+                        framed_writer.send(XMessage::Message {content: format!("update proc {id} to running "), id: 0}).await?;
+
+                        let mut worker_table = worker_table.lock().await;
+                        let worker = worker_table.get_mut(&client_id).unwrap();
+
+                        worker.load += 1;
                     }
-                    XMessage::Message { id: 6, .. } => {
-                        framed_writer.send(XMessage::Message {content: "changing table to mark proc as terminated (c)".to_string(), id: 6}).await?;
+                    XMessage::WorkerOp { op: Operation::Update, id, from: State::Running, to: State::Terminated} => {
+                        framed_writer.send(XMessage::Message {content: format!("Terminat proc {id}"), id: 0}).await?;
+
+                        let mut worker_table = worker_table.lock().await;
+                        let worker = worker_table.get_mut(&client_id).unwrap();
+
+                        worker.load -= 1;
                     }
-                    XMessage::Message { id: 7, .. } => {
-                        framed_writer.send(XMessage::Message {content: "changing table to mark proc as terminated (e)".to_string(), id: 7}).await?;
-                    }
+                    // TODO: Except case
+                    // XMessage::WorkerOp { op: Operation::Update, id, from: State::Submiting, to: State::Running } => {
+                    //     framed_writer.send(XMessage::Message {content: format!("update proc {id} to running "), id: 0}).await?;
+                    // }
                     _ => {
                         println!("main.rs narrate {message:?}");
                     }
@@ -174,12 +185,6 @@ async fn handle_worker(
             Some(message) = rx.recv() => {
                 framed_writer.send(message).await?;
 
-                // TODO: this should move to above when get submit ack message
-                // v.v load -1 should happened when get complete ack message
-                let mut worker_table = worker_table.lock().await;
-                let worker = worker_table.get_mut(&client_id).unwrap();
-
-                worker.load += 1;
             }
 
             _ = interval.tick() => {

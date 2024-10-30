@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use futures::SinkExt;
 use rand::{self, Rng};
+use tatzelwurm::codec::Operation;
 use tatzelwurm::codec::{Codec, XMessage};
+use tatzelwurm::task::State;
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::{
     net::TcpStream,
@@ -73,7 +75,6 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!(err);
     }
 
-
     let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
     let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
 
@@ -87,20 +88,36 @@ async fn main() -> anyhow::Result<()> {
                     XMessage::TaskDispatch(id) => {
                         framed_writer.send(
                             XMessage::Message {
-                                content: format!("I got the task {id}, Sir! Working on it!"), 
+                                content: format!("I got the task {id}, Sir! Working on it!"),
                                 id: 0
                             }).await?;
-                        let msg = XMessage::Message { id: 8, content: "running".to_string() };
+                        let msg = XMessage::WorkerOp{
+                            op: Operation::Update, 
+                            id, 
+                            from: State::Submiting,
+                            to: State::Running,
+                        };
                         framed_writer.send(msg).await?;
 
                         let ack_rx = run_task_with_ack();
 
                         if let Ok(()) = ack_rx.await {
-                            let msg = XMessage::Message { id: 6, content: "complete".to_string() };
+                            let msg = XMessage::WorkerOp{
+                                op: Operation::Update, 
+                                id, 
+                                from: State::Running,
+                                to: State::Terminated,
+                            };
                             framed_writer.send(msg).await?;
                         }
                         else {
-                            let msg = XMessage::Message { id: 7, content: "except".to_string() };
+                            // TODO: distinguish from the successful complete
+                            let msg = XMessage::WorkerOp{
+                                op: Operation::Update, 
+                                id, 
+                                from: State::Running,
+                                to: State::Terminated,
+                            };
                             framed_writer.send(msg).await?;
                         }
                     }

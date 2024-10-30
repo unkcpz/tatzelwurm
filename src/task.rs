@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 
+use serde::{Deserialize, Serialize};
 use tokio::{sync::Mutex, time};
 use uuid::Uuid;
 
 use crate::codec::XMessage;
 use crate::worker;
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum State {
     Ready,
     Submiting,
