@@ -3,13 +3,13 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
-use crate::codec::XMessage;
+use crate::codec::IMessage;
 
 #[derive(Debug)]
 pub struct Worker {
     // The rx used for communicate
     // TODO: make fields private
-    pub tx: mpsc::Sender<XMessage>,
+    pub tx: mpsc::Sender<IMessage>,
 
     // number of processes running on this worker
     pub load: u64,

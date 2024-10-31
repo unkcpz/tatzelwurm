@@ -14,15 +14,21 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use uuid::Uuid;
 
-use tatzelwurm::{codec::Operation::{self, Inspect, Submit}, task::State};
 use tatzelwurm::{
     codec::Codec,
     task,
     worker::{self, Worker},
 };
 use tatzelwurm::{
-    codec::XMessage,
+    codec::{IMessage, XMessage},
     task::{dispatch, Task},
+};
+use tatzelwurm::{
+    codec::{
+        Operation::{Inspect, Submit},
+        TableOp,
+    },
+    task::TaskState,
 };
 
 enum Client {
@@ -153,7 +159,7 @@ async fn handle_worker(
                     XMessage::HeartBeat(port) => {
                         println!("worker {port} alive!");
                     }
-                    XMessage::WorkerOp { op: Operation::Update, id, from: State::Submiting, to: State::Running } => {
+                    XMessage::TaskStateChange {id, from: TaskState::Submiting, to: TaskState::Running } => {
                         framed_writer.send(XMessage::Message {content: format!("update proc {id} to running "), id: 0}).await?;
 
                         let mut worker_table = worker_table.lock().await;
@@ -161,7 +167,7 @@ async fn handle_worker(
 
                         worker.load += 1;
                     }
-                    XMessage::WorkerOp { op: Operation::Update, id, from: State::Running, to: State::Terminated} => {
+                    XMessage::TaskStateChange { id, from: TaskState::Running, to: TaskState::Complete } => {
                         framed_writer.send(XMessage::Message {content: format!("Terminat proc {id}"), id: 0}).await?;
 
                         let mut worker_table = worker_table.lock().await;
@@ -170,8 +176,13 @@ async fn handle_worker(
                         worker.load -= 1;
                     }
                     // TODO: Except case
-                    // XMessage::WorkerOp { op: Operation::Update, id, from: State::Submiting, to: State::Running } => {
-                    //     framed_writer.send(XMessage::Message {content: format!("update proc {id} to running "), id: 0}).await?;
+                    // XMessage::TaskStateChange { id, from: TaskState::Running, to: TaskState::Complete } => {
+                    //     framed_writer.send(XMessage::Message {content: format!("Terminat proc {id}"), id: 0}).await?;
+                    //
+                    //     let mut worker_table = worker_table.lock().await;
+                    //     let worker = worker_table.get_mut(&client_id).unwrap();
+                    //
+                    //     worker.load -= 1;
                     // }
                     _ => {
                         println!("main.rs narrate {message:?}");
@@ -182,9 +193,13 @@ async fn handle_worker(
             // message from task dispatch table lookup
             // fast-forward to the real worker client
             // then update the worker booking
-            Some(message) = rx.recv() => {
-                framed_writer.send(message).await?;
-
+            Some(imsg) = rx.recv() => {
+                if let IMessage::TaskLaunch(id) = imsg {
+                    let xmsg = XMessage::TaskLaunch(id);
+                    framed_writer.send(xmsg).await?;
+                } else {
+                    anyhow::bail!("unknown msg {imsg:?} from dispatcher.");
+                }
             }
 
             _ = interval.tick() => {

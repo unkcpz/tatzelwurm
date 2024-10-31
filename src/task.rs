@@ -5,21 +5,22 @@ use serde::{Deserialize, Serialize};
 use tokio::{sync::Mutex, time};
 use uuid::Uuid;
 
-use crate::codec::XMessage;
+use crate::codec::{IMessage, XMessage};
 use crate::worker;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum State {
+pub enum TaskState {
     Ready,
     Submiting,
     Running,
-    Terminated,
+    Complete,
+    Except,
 }
 
 #[derive(Debug)]
 pub struct Task {
     pub id: Uuid,
-    pub state: State,
+    pub state: TaskState,
     pub priority: u32,
     pub worker: Option<Uuid>,
 }
@@ -29,7 +30,7 @@ impl Task {
     pub fn new(priority: u32) -> Self {
         Self {
             id: Uuid::new_v4(),
-            state: State::Ready,
+            state: TaskState::Ready,
             priority,
             worker: None,
         }
@@ -74,12 +75,12 @@ pub async fn dispatch(worker_table: worker::Table, task_table: Table) -> anyhow:
                     let wuuid_ = act_by.0;
                     let worker = act_by.1;
 
-                    let xmessage = XMessage::TaskDispatch(*tuuid_);
-                    if let Err(e) = worker.tx.send(xmessage).await {
+                    let msg = IMessage::TaskLaunch(*tuuid_);
+                    if let Err(e) = worker.tx.send(msg).await {
                         eprintln!("Failed to send message: {e}");
                     } else {
                         // TODO: require a ack from worker and then make the table change
-                        task.state = State::Submiting;
+                        task.state = TaskState::Submiting;
                         task.worker = Some(wuuid_);
                     }
                 } else {

@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use futures::SinkExt;
 use rand::{self, Rng};
-use tatzelwurm::codec::Operation;
 use tatzelwurm::codec::{Codec, XMessage};
-use tatzelwurm::task::State;
+use tatzelwurm::codec::{Operation, TableOp};
+use tatzelwurm::task::TaskState;
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::{
     net::TcpStream,
@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             Some(Ok(message)) = framed_reader.next() => {
                 match message {
-                    XMessage::TaskDispatch(id) => {
+                    XMessage::TaskLaunch(id) => {
                         run_task(id, &mut framed_reader, &mut framed_writer).await?;
                     }
                     XMessage::HeartBeat(port) => {
@@ -111,37 +111,39 @@ async fn run_task<'a>(
     framed_reader: &mut FramedRead<ReadHalf<'a>, Codec<XMessage>>,
     framed_writer: &mut FramedWrite<WriteHalf<'a>, Codec<XMessage>>,
 ) -> anyhow::Result<()> {
+    // dummy message to be printed in coordinator side
     framed_writer
         .send(XMessage::Message {
             content: format!("I got the task {id}, Sir! Working on it!"),
             id: 0,
         })
         .await?;
-    let msg = XMessage::WorkerOp {
-        op: Operation::Update,
+
+    // The way to fire a task is:
+    // 1. send a message and ask to add the item into the task table.
+    // 2. send a message to ask for table look up.
+    let msg = XMessage::TaskStateChange {
         id,
-        from: State::Submiting,
-        to: State::Running,
+        from: TaskState::Submiting,
+        to: TaskState::Running,
     };
     framed_writer.send(msg).await?;
 
     let ack_rx = run_task_with_ack();
 
     if let Ok(()) = ack_rx.await {
-        let msg = XMessage::WorkerOp {
-            op: Operation::Update,
+        let msg = XMessage::TaskStateChange {
             id,
-            from: State::Running,
-            to: State::Terminated,
+            from: TaskState::Running,
+            to: TaskState::Complete,
         };
         framed_writer.send(msg).await?;
     } else {
         // TODO: distinguish from the successful complete
-        let msg = XMessage::WorkerOp {
-            op: Operation::Update,
+        let msg = XMessage::TaskStateChange {
             id,
-            from: State::Running,
-            to: State::Terminated,
+            from: TaskState::Running,
+            to: TaskState::Except,
         };
         framed_writer.send(msg).await?;
     }

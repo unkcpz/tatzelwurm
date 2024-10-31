@@ -21,6 +21,10 @@ Two parts require this `add_task_subscriber` interface.
 - The `Process` can be `launch` or `continue` by the `ProcessLauncher` registered with its `__call__` (queue up tasks). 
 - The `Process` itself when initilized, will registered the `message_reciever` to listen to queue when there are action signals to `play`, `pause` or `kill` the `Process`.
 
+The reason why we should not rely on 3rd-part message broker is not only that the extra service is hard to deploy.
+Those message broker is design for large distribute system runs for microservices and usually involve with a lot of machines. 
+In AiiDA case, the common scenario is that there are not too many clients (workers/actioners) talk to server (coordinator), thus it requires a very neat implementation that can add more bussiness logic around but still keep it lightweight. 
+
 ### Design note
 
 The related design pattern is:
@@ -108,25 +112,69 @@ Everytime when the coordinator "look at" two tables, it needs to make the decisi
 
 #### Message types
 
+In the whole design, the message is used to communicate between different entities. 
+I want to have to different type of messages for two purposes:
+
+- On the one hand, for message passing between clients and server over tcp stream and require serialize and deserialize.
+- On the other hand, for in-processing communications only the message is passing through channels and can contain oneshot channel for ack which can not be serialized.
+
+For the tcp communication over wires, the message will be send and will triggle a bundle of operations on two side.
+I call this message type `ExMessage`, where "Ex" for "external".
+This type of message is already contain abstraction of operation and become interfaces for communication between clients and the coordinator.
+
+For the in-processing communication that use shared memory over mpsc or oneshot channels, the message contains the atomic operation on for example manipulating worker and task table.
+I call this message type `IMessage`, where "I" for "internal".
+
 ```rust
 #[derive(Serialize, Deserialize, Debug)]
 pub enum XMessage {
-    // for fallback general unknown type messages
-    Message {id: u32, content: String},
+    // dummy type for fallback general unknown type messages
+    BulkMessage(String),
 
     // The Uuid is the task uuid
-    TaskDispatch(Uuid), 
+    // coordinator -> worker
+    TaskLaunch(Uuid), 
 
     // hand shake message when the msg content is a string
+    // <-> between server and clients
     HandShake(String),
 
     // Heartbeat with the port as identifier
+    // <-> between server and clients
     HeartBeat(u16),
 
-    // Operations from actioner
-    ActionerOp(Operation),
+    // Notify to coordinator that worker changes state of task
+    TaskStateChange{id: Uuid, from: TaskState, to: TaskState},
+}
+
+#[derive(Debug)]
+pub enum IMessage {
+    // dummy type for fallback general unknown type messages
+    BulkMessage(String),
+
+    // The Uuid is the task uuid
+    // dispatcher using worker's tx handler -> worker's rx, after table lookup
+    TaskLaunch(Uuid), 
+
+    // Operation act on worker table
+    WorkerTableOp {
+        op: TableOp,
+        id: Uuid,
+    },
+
+    // Operation act on worker table
+    TaskTableOp {
+        op: TableOp,
+        id: Uuid,
+        from: TaskState,
+        to: TaskState,
+    },
 }
 ```
+
+There is a typical case that one bundled operation relys on both.
+When dispatch a task to worker by two table lookup, an internal message `IMessage::TaskLaunch(Uuid)` first fired from a dispatch which runs concurrently.
+The message is relayed to worker client by parsing the message and convert it to an external message with type `XMessage::TaskLaunch(Uuid)`, which send to the correspond worker.
 
 #### Proactive mission assignment to workers
 
@@ -336,3 +384,11 @@ Comments:
 
 - Is it better to store checkpoint in a seperate (in legacy it is with process node) table or even in a separate resource? 
 - Who should create (create means initialize the instance, store it is the "DB" and set to the created state) the task? Coordinator or worker or actioner (in legacy it is actioner)?
+
+### Performance tips
+
+If the performance become bottleneck and after the benchmark it shows the the bottleneck is not from architecture and implementation.
+There are some underlined crates and tools to use as the alternative for message passing or DB management.
+
+- [Rkyv](https://github.com/rkyv/rkyv) for zero-copy deserialization as alternative to msgpack.
+- [dashmap](https://github.com/xacrimon/dashmap) as alternative of HashMap if in-memory store with mutex map is used.

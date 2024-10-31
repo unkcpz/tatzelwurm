@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
 use uuid::Uuid;
 
-use crate::task::State;
+use crate::task::TaskState;
 
+// XXX: deprecate me
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Operation {
     Inspect,
@@ -17,17 +18,31 @@ pub enum Operation {
     Create,
     Update,
     Read, // similar to Inspect
-    Delete, 
+    Delete,
+}
+
+// CURD to operate on the table
+// The operation is wrapped in the message send to the coordinator.
+// The coordinator will then relay the operation to table actor to make the real change.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum TableOp {
+    Create,
+    Update,
+    Read,
+    Delete,
 }
 
 // TODO: should look at rmp-rpc, see if use it or re-implement as same way
 #[derive(Serialize, Deserialize, Debug)]
 pub enum XMessage {
     // for fallback general unknown type messages
-    Message {id: u32, content: String},
+    Message {
+        id: u32,
+        content: String,
+    },
 
     // The Uuid is the task uuid
-    TaskDispatch(Uuid), 
+    TaskLaunch(Uuid),
 
     // hand shake message when the msg content is a string
     HandShake(String),
@@ -36,11 +51,63 @@ pub enum XMessage {
     HeartBeat(u16),
 
     // Operations from actioner
+    // XXX: deprecate me
     ActionerOp(Operation),
 
     // Operations from worker
     // XXX: may combine with the ActionerOp??
-    WorkerOp{ op: Operation, id: Uuid, from: State, to: State},
+    // deprecate me!
+    WorkerOp {
+        op: Operation,
+        id: Uuid,
+    },
+
+    // Operation act on worker table
+    WorkerTableOp {
+        op: TableOp,
+        id: Uuid,
+        from: TaskState,
+        to: TaskState,
+    },
+
+    // Operation act on worker table
+    TaskTableOp {
+        op: TableOp,
+        id: Uuid,
+        from: TaskState,
+        to: TaskState,
+    },
+
+    // Notify to coordinator that worker changes state of task
+    TaskStateChange {
+        id: Uuid,
+        from: TaskState,
+        to: TaskState,
+    },
+}
+
+#[derive(Debug)]
+pub enum IMessage {
+    // dummy type for fallback general unknown type messages
+    BulkMessage(String),
+
+    // The Uuid is the task uuid
+    // dispatcher using worker's tx handler -> worker's rx, after table lookup
+    TaskLaunch(Uuid),
+
+    // Operation act on worker table
+    WorkerTableOp {
+        op: TableOp,
+        id: Uuid,
+    },
+
+    // Operation act on worker table
+    TaskTableOp {
+        op: TableOp,
+        id: Uuid,
+        from: TaskState,
+        to: TaskState,
+    },
 }
 
 // A custom CodeC that handles de/serialize messagepack data
@@ -49,7 +116,6 @@ pub struct Codec<T> {
 }
 
 impl<T> Codec<T> {
-
     #[must_use]
     pub fn new() -> Self {
         Codec {
