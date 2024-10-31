@@ -17,7 +17,7 @@ use uuid::Uuid;
 use tatzelwurm::{
     codec::Codec,
     task,
-    worker::{self, Worker},
+    worker::{self},
 };
 use tatzelwurm::{
     codec::{IMessage, XMessage},
@@ -30,6 +30,8 @@ use tatzelwurm::{
     },
     task::TaskState,
 };
+
+use crate::worker::Worker;
 
 enum Client {
     Worker { id: u32, stream: TcpStream },
@@ -73,11 +75,11 @@ async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:5677").await?;
-    let worker_table: worker::Table = Arc::new(Mutex::new(HashMap::new()));
+    let worker_table = worker::Table::new();
     let task_table: task::Table = Arc::new(Mutex::new(HashMap::new()));
 
     // spawn a load balance lookup task and send process to run on worker
-    let worker_table_clone = Arc::clone(&worker_table);
+    let worker_table_clone = worker_table.clone();
     let task_table_clone = Arc::clone(&task_table);
     tokio::spawn(async move {
         let _ = dispatch(worker_table_clone, task_table_clone).await;
@@ -88,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
             Ok((stream, addr)) => {
                 // TODO: spawn task for handling every client
                 println!("Client listen on: {addr}");
-                let worker_table_clone = Arc::clone(&worker_table);
+                let worker_table_clone = worker_table.clone();
                 let task_table_clone = Arc::clone(&task_table);
 
                 match handshake(stream).await {
@@ -136,12 +138,12 @@ async fn handle_worker(
 
     // TODO: The handshake is the guardian for security, the authentication should
     // happend here.
-    let client_id = Uuid::new_v4();
 
     // XXX: different client type: (1) worker (2) actioner from handshaking
     let (tx, mut rx) = mpsc::channel(100);
     let worker = Worker { tx, load: 0 };
-    worker_table.lock().await.insert(client_id, worker);
+
+    let worker_id = worker_table.create(worker).await;
 
     loop {
         tokio::select! {
@@ -162,18 +164,20 @@ async fn handle_worker(
                     XMessage::TaskStateChange {id, from: TaskState::Submiting, to: TaskState::Running } => {
                         framed_writer.send(XMessage::Message {content: format!("update proc {id} to running "), id: 0}).await?;
 
-                        let mut worker_table = worker_table.lock().await;
-                        let worker = worker_table.get_mut(&client_id).unwrap();
+                        if let Some(mut worker) = worker_table.read(&worker_id).await {
+                            worker.load += 1;
 
-                        worker.load += 1;
+                            worker_table.update(&worker_id, worker).await?;
+                        }
                     }
                     XMessage::TaskStateChange { id, from: TaskState::Running, to: TaskState::Complete } => {
                         framed_writer.send(XMessage::Message {content: format!("Terminat proc {id}"), id: 0}).await?;
 
-                        let mut worker_table = worker_table.lock().await;
-                        let worker = worker_table.get_mut(&client_id).unwrap();
+                        if let Some(mut worker) = worker_table.read(&worker_id).await {
+                            worker.load -= 1;
 
-                        worker.load -= 1;
+                            worker_table.update(&worker_id, worker).await?;
+                        }
                     }
                     // TODO: Except case
                     // XMessage::TaskStateChange { id, from: TaskState::Running, to: TaskState::Complete } => {

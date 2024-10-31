@@ -58,30 +58,22 @@ pub async fn dispatch(worker_table: worker::Table, task_table: Table) -> anyhow:
         // in the task loop.
         // Since when assign the task to worker, the worker table is changed onwards.
         // But here I use the static table in a single lookup.
-        let worker_table = worker_table.lock().await;
-        if worker_table.is_empty() {
-            continue;
-        }
 
         async {
             // TODO: should be able to pick the least load worker based on process type
             let mut task_table = task_table.lock().await;
-            for (tuuid_, task) in task_table.iter_mut() {
-                if let Some(act_by) = worker_table
-                    .iter()
-                    .min_by_key(|&(_, client)| client.load)
-                    .map(|(&uuid, worker)| (uuid, worker))
-                {
-                    let wuuid_ = act_by.0;
-                    let worker = act_by.1;
+            for (task_id, task) in task_table.iter_mut() {
+                if let Some(worker_id) = worker_table.find_least_loaded_worker().await {
+                    let msg = IMessage::TaskLaunch(*task_id);
 
-                    let msg = IMessage::TaskLaunch(*tuuid_);
-                    if let Err(e) = worker.tx.send(msg).await {
-                        eprintln!("Failed to send message: {e}");
-                    } else {
-                        // TODO: require a ack from worker and then make the table change
-                        task.state = TaskState::Submiting;
-                        task.worker = Some(wuuid_);
+                    if let Some(worker) = worker_table.read(&worker_id).await {
+                        if let Err(e) = worker.tx.send(msg).await {
+                            eprintln!("Failed to send message: {e}");
+                        } else {
+                            // TODO: require a ack from worker and then make the table change
+                            task.state = TaskState::Submiting;
+                            task.worker = Some(worker_id);
+                        }
                     }
                 } else {
                     println!("no worker yet.");
