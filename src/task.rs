@@ -76,6 +76,16 @@ impl Table {
             anyhow::bail!("Item {id} not found")
         }
     }
+
+    pub async fn filter_by_state(&self, state: State) -> HashMap<Uuid, Task> {
+        self.inner
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, t)| t.state == state)
+            .map(|(&x, t)| (x, t.clone()))
+            .collect()
+    }
 }
 // lookup look at two table and construct a message send to worker.
 
