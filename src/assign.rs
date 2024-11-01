@@ -26,28 +26,36 @@ pub async fn assign(worker_table: WorkerTable, task_table: TaskTable) -> anyhow:
         // But here I use the static table in a single lookup.
 
         async {
-            // TODO: inner should be private and should impl Iter 
+            // TODO: inner should be private and should impl Iter
+            // deadlock: the task_table lock not release but then it reused inside loop
+            // I should make inner private, here I need filter all ready task and loop after.
             for (task_id, _) in task_table.inner.lock().await.iter() {
-                let mut task = task_table.read(task_id).await.unwrap();
-
-                if task.state != task::State::Ready {
-                    continue;
-                }
-
-                // TODO: should be able to pick the least load worker based on process type
-                if let Some(worker_id) = worker_table.find_least_loaded_worker().await {
-                    if let Some(worker) = worker_table.read(&worker_id).await {
-                        if let Err(e) = worker.launch_task(task_id).await {
-                            eprintln!("Failed to send message: {e}");
-                        } else {
-                            // TODO: require a ack from worker and then make the table change
-                            task.state = task::State::Submit;
-                            task.worker = Some(worker_id);
-                            let _ = task_table.update(task_id, task).await;
-                        }
+                println!("!!!!HERE");
+                dbg!(task_id);
+                dbg!(&task_table);
+                if let Some(mut task) = task_table.read(task_id).await {
+                    dbg!(&task.state);
+                    if task.state != task::State::Ready {
+                        continue;
                     }
-                } else {
-                    println!("no worker yet.");
+
+                    // TODO: should be able to pick the least load worker based on process type
+                    if let Some(worker_id) = worker_table.find_least_loaded_worker().await {
+                        if let Some(worker) = worker_table.read(&worker_id).await {
+                            if let Err(e) = worker.launch_task(task_id).await {
+                                eprintln!("Failed to send message: {e}");
+                            } else {
+                                // TODO: require a ack from worker and then make the table change
+                                println!("HERE AS WELL??");
+                                println!("submit task");
+                                task.state = task::State::Submit;
+                                task.worker = Some(worker_id);
+                                let _ = task_table.update(task_id, task).await;
+                            }
+                        }
+                    } else {
+                        println!("no worker yet.");
+                    }
                 }
             }
         }

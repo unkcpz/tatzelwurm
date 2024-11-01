@@ -180,6 +180,7 @@ async fn handle_worker_xmessage<'a>(
     task_table: &task::Table,
     worker_id: &Uuid,
 ) -> anyhow::Result<()> {
+    dbg!(msg);
     match msg {
         XMessage::HeartBeat(port) => {
             println!("worker {port} alive!");
