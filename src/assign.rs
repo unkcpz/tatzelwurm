@@ -29,23 +29,29 @@ pub async fn assign(worker_table: WorkerTable, task_table: TaskTable) -> anyhow:
             let ready_tasks = task_table.filter_by_state(task::State::Ready).await;
 
             for (task_id, _) in ready_tasks {
-                if let Some(mut task) = task_table.read(&task_id).await {
-                    // TODO: should be able to pick the least load worker based on process type
-                    if let Some(worker_id) = worker_table.find_least_loaded_worker().await {
-                        if let Some(worker) = worker_table.read(&worker_id).await {
-                            if let Err(e) = worker.launch_task(&task_id).await {
-                                eprintln!("Failed to send message: {e}");
-                            } else {
-                                // TODO: require a ack from worker and then make the table change
-                                task.state = task::State::Submit;
-                                task.worker = Some(worker_id);
-                                let _ = task_table.update(&task_id, task).await;
-                            }
-                        }
-                    } else {
-                        println!("no worker yet.");
-                    }
+                let Some(mut task) = task_table.read(&task_id).await else {
+                    continue;
+                };
+
+                // TODO: should be able to pick the least load worker based on process type
+                let Some(worker_id) = worker_table.find_least_loaded_worker().await else {
+                    println!("No worker yet available");
+                    continue;
+                };
+
+                let Some(worker) = worker_table.read(&worker_id).await else {
+                    continue;
+                };
+
+                if let Err(e) = worker.launch_task(&task_id).await {
+                    eprintln!("Failed to send message: {e}");
+                    continue;
                 }
+
+                // TODO: require a ack from worker and then make the table change
+                task.state = task::State::Submit;
+                task.worker = Some(worker_id);
+                let _ = task_table.update(&task_id, task).await;
             }
         }
         .await;

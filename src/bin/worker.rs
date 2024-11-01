@@ -20,7 +20,7 @@ async fn perform_task() {
         rng.gen_range(1..10)
     };
     sleep(Duration::from_secs(x)).await;
-    println!("Task {x} complete!");
+    println!("Task that sleep {x}s complete!");
 }
 
 fn run_task_with_ack() -> oneshot::Receiver<()> {
