@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::{mpsc, Mutex};
+use anyhow::Context;
+use tokio::sync::{mpsc::Sender, Mutex};
 use uuid::Uuid;
 
 use crate::codec::IMessage;
@@ -9,10 +10,32 @@ use crate::codec::IMessage;
 pub struct Worker {
     // The rx used for communicate
     // TODO: make fields private
-    pub tx: mpsc::Sender<IMessage>,
+    tx: Sender<IMessage>,
 
     // number of processes running on this worker
-    pub load: u64,
+    load: u64,
+}
+
+impl Worker {
+    pub fn new(tx: Sender<IMessage>) -> Self {
+        Self { tx, load: 0 }
+    }
+
+    pub async fn launch_task(&self, id: &Uuid) -> anyhow::Result<()> {
+        let msg = IMessage::TaskLaunch(*id);
+        self.tx
+            .send(msg)
+            .await
+            .context("fail in sending task to worker")
+    }
+
+    pub fn incr_load(&mut self) {
+        self.load += 1;
+    }
+
+    pub fn decr_load(&mut self) {
+        self.load -= 1;
+    }
 }
 
 // TODO: use actor pattern

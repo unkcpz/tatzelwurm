@@ -3,8 +3,7 @@ use std::time::Duration;
 use futures::SinkExt;
 use rand::{self, Rng};
 use tatzelwurm::codec::{Codec, XMessage};
-use tatzelwurm::codec::{Operation, TableOp};
-use tatzelwurm::task::TaskState;
+use tatzelwurm::task::State as TaskState;
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::{
     net::TcpStream,
@@ -120,21 +119,23 @@ async fn run_task<'a>(
         .await?;
 
     // The way to fire a task is:
+    // 0. Run the task and get the ack_rx
     // 1. send a message and ask to add the item into the task table.
     // 2. send a message to ask for table look up.
+    let ack_rx = run_task_with_ack();
+
     let msg = XMessage::TaskStateChange {
         id,
-        from: TaskState::Submiting,
-        to: TaskState::Running,
+        from: TaskState::Submit,
+        to: TaskState::Run,
     };
     framed_writer.send(msg).await?;
 
-    let ack_rx = run_task_with_ack();
-
+    // rx ack resolved means the task is complete
     if let Ok(()) = ack_rx.await {
         let msg = XMessage::TaskStateChange {
             id,
-            from: TaskState::Running,
+            from: TaskState::Run,
             to: TaskState::Complete,
         };
         framed_writer.send(msg).await?;
@@ -142,7 +143,7 @@ async fn run_task<'a>(
         // TODO: distinguish from the successful complete
         let msg = XMessage::TaskStateChange {
             id,
-            from: TaskState::Running,
+            from: TaskState::Run,
             to: TaskState::Except,
         };
         framed_writer.send(msg).await?;

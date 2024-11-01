@@ -1,19 +1,19 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::time::Duration;
 
 use futures::SinkExt;
 use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::{
-        mpsc::{self},
-        Mutex,
-    },
+    net::{tcp::WriteHalf, TcpListener, TcpStream},
+    sync::mpsc::{self},
     time,
 };
 
 use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite};
-use uuid::Uuid;
 
+use tatzelwurm::{
+    assign::assign,
+    codec::Operation::{Inspect, Submit},
+};
 use tatzelwurm::{
     codec::Codec,
     task,
@@ -21,15 +21,9 @@ use tatzelwurm::{
 };
 use tatzelwurm::{
     codec::{IMessage, XMessage},
-    task::{dispatch, Task},
+    task::Task,
 };
-use tatzelwurm::{
-    codec::{
-        Operation::{Inspect, Submit},
-        TableOp,
-    },
-    task::TaskState,
-};
+use uuid::Uuid;
 
 use crate::worker::Worker;
 
@@ -40,7 +34,7 @@ enum Client {
 
 // Perform handshake, decide client type (worker or actioner) and protocol (always messagepack)
 // XXX: hyperequeue seems doesn't have handshake stage, how??
-async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
+async fn handshake(stream: TcpStream) -> anyhow::Result<Client> {
     let mut frame = Framed::new(stream, Codec::<XMessage>::new());
 
     frame
@@ -76,13 +70,13 @@ async fn handshake(mut stream: TcpStream) -> anyhow::Result<Client> {
 async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:5677").await?;
     let worker_table = worker::Table::new();
-    let task_table: task::Table = Arc::new(Mutex::new(HashMap::new()));
+    let task_table = task::Table::new();
 
     // spawn a load balance lookup task and send process to run on worker
     let worker_table_clone = worker_table.clone();
-    let task_table_clone = Arc::clone(&task_table);
+    let task_table_clone = task_table.clone();
     tokio::spawn(async move {
-        let _ = dispatch(worker_table_clone, task_table_clone).await;
+        let _ = assign(worker_table_clone, task_table_clone).await;
     });
 
     loop {
@@ -91,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
                 // TODO: spawn task for handling every client
                 println!("Client listen on: {addr}");
                 let worker_table_clone = worker_table.clone();
-                let task_table_clone = Arc::clone(&task_table);
+                let task_table_clone = task_table.clone();
 
                 match handshake(stream).await {
                     Ok(Client::Worker { stream, .. }) => {
@@ -124,12 +118,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn handle_worker(
-    stream: TcpStream,
+    mut stream: TcpStream,
     worker_table: worker::Table,
     task_table: task::Table,
 ) -> anyhow::Result<()> {
     // TODO: check can I use borrowed halves if no moves of half to spawn
-    let (read_half, write_half) = stream.into_split();
+    let (read_half, write_half) = stream.split();
 
     let mut framed_reader = FramedRead::new(read_half, Codec::<XMessage>::new());
     let mut framed_writer = FramedWrite::new(write_half, Codec::<XMessage>::new());
@@ -141,7 +135,7 @@ async fn handle_worker(
 
     // XXX: different client type: (1) worker (2) actioner from handshaking
     let (tx, mut rx) = mpsc::channel(100);
-    let worker = Worker { tx, load: 0 };
+    let worker = Worker::new(tx);
 
     let worker_id = worker_table.create(worker).await;
 
@@ -155,46 +149,11 @@ async fn handle_worker(
             // - should reported from worker when the mission is finished
             // - should also get information from worker complain about the long running
             // block process if it runs on non-block worker.
-            Some(Ok(message)) = framed_reader.next() => {
-                // dbg!(&message);
-                match message {
-                    XMessage::HeartBeat(port) => {
-                        println!("worker {port} alive!");
-                    }
-                    XMessage::TaskStateChange {id, from: TaskState::Submiting, to: TaskState::Running } => {
-                        framed_writer.send(XMessage::Message {content: format!("update proc {id} to running "), id: 0}).await?;
-
-                        if let Some(mut worker) = worker_table.read(&worker_id).await {
-                            worker.load += 1;
-
-                            worker_table.update(&worker_id, worker).await?;
-                        }
-                    }
-                    XMessage::TaskStateChange { id, from: TaskState::Running, to: TaskState::Complete } => {
-                        framed_writer.send(XMessage::Message {content: format!("Terminat proc {id}"), id: 0}).await?;
-
-                        if let Some(mut worker) = worker_table.read(&worker_id).await {
-                            worker.load -= 1;
-
-                            worker_table.update(&worker_id, worker).await?;
-                        }
-                    }
-                    // TODO: Except case
-                    // XMessage::TaskStateChange { id, from: TaskState::Running, to: TaskState::Complete } => {
-                    //     framed_writer.send(XMessage::Message {content: format!("Terminat proc {id}"), id: 0}).await?;
-                    //
-                    //     let mut worker_table = worker_table.lock().await;
-                    //     let worker = worker_table.get_mut(&client_id).unwrap();
-                    //
-                    //     worker.load -= 1;
-                    // }
-                    _ => {
-                        println!("main.rs narrate {message:?}");
-                    }
-                }
+            Some(Ok(msg)) = framed_reader.next() => {
+                handle_worker_xmessage(&msg, &mut framed_writer, &worker_table, &task_table, &worker_id).await?;
             }
 
-            // message from task dispatch table lookup
+            // message from task assign table lookup
             // fast-forward to the real worker client
             // then update the worker booking
             Some(imsg) = rx.recv() => {
@@ -202,7 +161,7 @@ async fn handle_worker(
                     let xmsg = XMessage::TaskLaunch(id);
                     framed_writer.send(xmsg).await?;
                 } else {
-                    anyhow::bail!("unknown msg {imsg:?} from dispatcher.");
+                    anyhow::bail!("unknown msg {imsg:?} from assigner.");
                 }
             }
 
@@ -212,6 +171,75 @@ async fn handle_worker(
             }
         }
     }
+}
+
+async fn handle_worker_xmessage<'a>(
+    msg: &XMessage,
+    framed_writer: &mut FramedWrite<WriteHalf<'a>, Codec<XMessage>>,
+    worker_table: &worker::Table,
+    task_table: &task::Table,
+    worker_id: &Uuid,
+) -> anyhow::Result<()> {
+    match msg {
+        XMessage::HeartBeat(port) => {
+            println!("worker {port} alive!");
+        }
+
+        //
+        XMessage::TaskStateChange {
+            id,
+            from: task::State::Submit,
+            to: task::State::Run,
+        } => {
+            if let Some(mut task) = task_table.read(id).await {
+                task.state = task::State::Run;
+                task_table.update(id, task).await?;
+            }
+
+            if let Some(mut worker) = worker_table.read(worker_id).await {
+                worker.incr_load();
+
+                worker_table.update(worker_id, worker).await?;
+            }
+        }
+        XMessage::TaskStateChange {
+            id,
+            from: task::State::Run,
+            to: task::State::Complete,
+        } => {
+            if let Some(mut task) = task_table.read(id).await {
+                task.state = task::State::Complete;
+                task_table.update(id, task).await?;
+            }
+
+            if let Some(mut worker) = worker_table.read(worker_id).await {
+                worker.decr_load();
+
+                worker_table.update(worker_id, worker).await?;
+            }
+        }
+        XMessage::TaskStateChange {
+            id,
+            from: task::State::Run,
+            to: task::State::Except,
+        } => {
+            if let Some(mut task) = task_table.read(id).await {
+                task.state = task::State::Except;
+                task_table.update(id, task).await?;
+            }
+
+            if let Some(mut worker) = worker_table.read(worker_id).await {
+                worker.decr_load();
+
+                worker_table.update(worker_id, worker).await?;
+            }
+        }
+        _ => {
+            println!("main.rs narrate {msg:?}");
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_actioner(
@@ -244,9 +272,8 @@ async fn handle_actioner(
             }
             // placeholder, add a random test task to table
             XMessage::ActionerOp(Submit) => {
-                let mut task_table = task_table.lock().await;
                 let task = Task::new(0);
-                task_table.insert(task.id, task);
+                task_table.create(task).await;
                 let resp_msg = XMessage::Message {
                     id: 0,
                     content: format!("Good, hear you, \n {worker_table:#?}, \n {task_table:#?} \n"),

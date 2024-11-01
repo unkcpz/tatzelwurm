@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
 use uuid::Uuid;
 
-use crate::task::TaskState;
+use crate::task;
 
 // XXX: deprecate me
 #[derive(Serialize, Deserialize, Debug)]
@@ -66,23 +66,23 @@ pub enum XMessage {
     WorkerTableOp {
         op: TableOp,
         id: Uuid,
-        from: TaskState,
-        to: TaskState,
+        from: task::State,
+        to: task::State,
     },
 
     // Operation act on worker table
     TaskTableOp {
         op: TableOp,
         id: Uuid,
-        from: TaskState,
-        to: TaskState,
+        from: task::State,
+        to: task::State,
     },
 
     // Notify to coordinator that worker changes state of task
     TaskStateChange {
         id: Uuid,
-        from: TaskState,
-        to: TaskState,
+        from: task::State,
+        to: task::State,
     },
 }
 
@@ -105,8 +105,8 @@ pub enum IMessage {
     TaskTableOp {
         op: TableOp,
         id: Uuid,
-        from: TaskState,
-        to: TaskState,
+        from: task::State,
+        to: task::State,
     },
 }
 
