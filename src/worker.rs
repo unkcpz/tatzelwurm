@@ -2,6 +2,8 @@ use anyhow::Context;
 use futures::SinkExt;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
+use tabled::builder::Builder as TableBuilder;
+use tabled::settings::Style;
 use uuid::Uuid;
 
 use tokio::sync::{mpsc::Sender, Mutex};
@@ -29,7 +31,6 @@ pub struct Worker {
 }
 
 impl Worker {
-
     #[must_use]
     pub fn new(tx: Sender<IMessage>) -> Self {
         Self { tx, load: 0 }
@@ -99,6 +100,21 @@ impl Table {
         } else {
             anyhow::bail!("Item {id} not found")
         }
+    }
+
+    /// Render a pretty printed table
+    pub async fn render(&self) -> String {
+        let mut builder = TableBuilder::default();
+        for (id, worker) in self.inner.lock().await.iter() {
+            let line = vec![id.to_string(), format!("{}", worker.load)];
+            builder.push_record(line);
+        }
+        let header = vec!["Uuid".to_string(), "load".to_string()];
+        builder.insert_record(0, header);
+
+        let mut table = builder.build();
+        table.with(Style::modern());
+        table.to_string()
     }
 
     pub async fn find_least_loaded_worker(&self) -> Option<Uuid> {

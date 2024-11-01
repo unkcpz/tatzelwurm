@@ -36,10 +36,7 @@ pub enum TableOp {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum XMessage {
     // for fallback general unknown type messages
-    Message {
-        id: u32,
-        content: String,
-    },
+    BulkMessage(String),
 
     // The Uuid is the task uuid
     TaskLaunch(Uuid),
@@ -69,6 +66,9 @@ pub enum XMessage {
         from: task::State,
         to: task::State,
     },
+
+    // Print tables
+    PrintTable(),
 
     // Operation act on worker table
     TaskTableOp {

@@ -69,23 +69,27 @@ async fn main() -> anyhow::Result<()> {
 
     match args.operation.as_str() {
         "inspect" => {
-            framed_writer.send(XMessage::ActionerOp(Inspect)).await?;
+            framed_writer.send(XMessage::PrintTable()).await?;
         }
         "submit" => {
             framed_writer.send(XMessage::ActionerOp(Submit)).await?;
         }
         _ => {
             framed_writer
-                .send(XMessage::Message {
-                    id: 0,
-                    content: "useless op".to_string(),
-                })
+                .send(XMessage::BulkMessage("useless op".to_string()))
                 .await?;
         }
     }
 
-    if let Some(Ok(resp_msg)) = framed_reader.next().await {
-        dbg!(resp_msg);
+    if let Some(Ok(msg)) = framed_reader.next().await {
+        match msg {
+            XMessage::BulkMessage(s) => {
+                println!("{s}");
+            }
+            _ => {
+                dbg!(msg);
+            }
+        }
     }
 
     Ok(())

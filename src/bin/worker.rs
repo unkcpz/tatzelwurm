@@ -112,10 +112,9 @@ async fn run_task<'a>(
 ) -> anyhow::Result<()> {
     // dummy message to be printed in coordinator side
     framed_writer
-        .send(XMessage::Message {
-            content: format!("I got the task {id}, Sir! Working on it!"),
-            id: 0,
-        })
+        .send(XMessage::BulkMessage(format!(
+            "I got the task {id}, Sir! Working on it!"
+        )))
         .await?;
 
     // The way to fire a task is:

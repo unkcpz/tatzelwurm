@@ -33,28 +33,25 @@ pub async fn handle(
     // block process if it runs on non-block worker.
     if let Some(Ok(msg)) = framed_reader.next().await {
         match msg {
-            XMessage::ActionerOp(Operation::Inspect) => {
-                let resp_msg = XMessage::Message {
-                    id: 0,
-                    content: format!("Good, hear you, \n {worker_table:#?}, \n {task_table:#?} \n"),
-                };
+            XMessage::PrintTable() => {
+                let resp_msg = XMessage::BulkMessage(format!(
+                    "{}\n\n{task_table:#?}\n", worker_table.render().await,
+                ));
                 framed_writer.send(resp_msg).await?;
             }
             // placeholder, add a random test task to table
             XMessage::ActionerOp(Operation::Submit) => {
                 let task = Task::new(0);
                 task_table.create(task).await;
-                let resp_msg = XMessage::Message {
-                    id: 0,
-                    content: format!("Good, hear you, \n {worker_table:#?}, \n {task_table:#?} \n"),
-                };
+                let resp_msg = XMessage::BulkMessage(format!(
+                    "Good, hear you, \n {worker_table:#?}, \n {task_table:#?} \n"
+                ));
                 framed_writer.send(resp_msg).await?;
             }
             _ => {
-                let resp_msg = XMessage::Message {
-                    id: 0,
-                    content: format!("Shutup, I try to ignore you, since you say '{msg:#?}'"),
-                };
+                let resp_msg = XMessage::BulkMessage(format!(
+                    "Shutup, I try to ignore you, since you say '{msg:#?}'"
+                ));
                 framed_writer.send(resp_msg).await?;
             }
         }
