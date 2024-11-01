@@ -35,7 +35,9 @@ pub async fn handle(
         match msg {
             XMessage::PrintTable() => {
                 let resp_msg = XMessage::BulkMessage(format!(
-                    "{}\n\n{task_table:#?}\n", worker_table.render().await,
+                    "{}\n\n{}\n",
+                    worker_table.render().await,
+                    task_table.render().await,
                 ));
                 framed_writer.send(resp_msg).await?;
             }
@@ -44,7 +46,9 @@ pub async fn handle(
                 let task = Task::new(0);
                 task_table.create(task).await;
                 let resp_msg = XMessage::BulkMessage(format!(
-                    "Good, hear you, \n {worker_table:#?}, \n {task_table:#?} \n"
+                    "{}\n\n{}\n",
+                    worker_table.render().await,
+                    task_table.render().await,
                 ));
                 framed_writer.send(resp_msg).await?;
             }

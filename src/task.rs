@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tabled::builder::Builder as TableBuilder;
+use tabled::settings::Style;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -12,6 +15,20 @@ pub enum State {
     Run,
     Complete,
     Except,
+    Killed,
+}
+
+impl fmt::Display for State {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            State::Ready => write!(f, "ready"),
+            State::Submit => write!(f, "submit"),
+            State::Run => write!(f, "run"),
+            State::Complete => write!(f, "complete"),
+            State::Except => write!(f, "Execpt"),
+            State::Killed => write!(f, "Killed"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +92,38 @@ impl Table {
         } else {
             anyhow::bail!("Item {id} not found")
         }
+    }
+
+    /// Render a pretty printed table
+    pub async fn render(&self) -> String {
+        let mut builder = TableBuilder::default();
+        for (id, task) in self.inner.lock().await.iter() {
+            let worker_id = if let Some(worker) = task.worker {
+                // XXX: ugly, show first 8 shorten chars
+                worker.to_string()[..8].to_string()
+            } else {
+                "-".to_string()
+            };
+
+            let line = vec![
+                id.to_string(),
+                format!("{}", task.priority),
+                format!("{}", task.state),
+                format!("{}", worker_id),
+            ];
+            builder.push_record(line);
+        }
+        let header = vec![
+            "Uuid".to_string(),
+            "priority".to_string(),
+            "state".to_string(),
+            "worker".to_string(),
+        ];
+        builder.insert_record(0, header);
+
+        let mut table = builder.build();
+        table.with(Style::modern());
+        table.to_string()
     }
 
     pub async fn filter_by_state(&self, state: State) -> HashMap<Uuid, Task> {
