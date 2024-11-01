@@ -11,7 +11,7 @@ use tokio::{
     time::{self, sleep},
 };
 use tokio_stream::StreamExt;
-use tokio_util::codec::{FramedRead, FramedWrite};
+use tokio_util::codec::{Framed, FramedRead, FramedWrite};
 use uuid::Uuid;
 
 async fn perform_task() {
@@ -35,12 +35,11 @@ fn run_task_with_ack() -> oneshot::Receiver<()> {
     ack_rx
 }
 
-async fn handshake<'a>(rhalf: &mut ReadHalf<'a>, whalf: &mut WriteHalf<'a>) -> anyhow::Result<()> {
-    let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
-    let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
+async fn handshake(stream: TcpStream) -> anyhow::Result<TcpStream> {
+    let mut framed = Framed::new(stream, Codec::<XMessage>::new());
 
     loop {
-        if let Some(Ok(message)) = framed_reader.next().await {
+        if let Some(Ok(message)) = framed.next().await {
             match message {
                 XMessage::HandShake(info) => match info.as_str() {
                     "Go" => {
@@ -48,7 +47,7 @@ async fn handshake<'a>(rhalf: &mut ReadHalf<'a>, whalf: &mut WriteHalf<'a>) -> a
                         break;
                     }
                     "Who you are?" => {
-                        framed_writer
+                        framed
                             .send(XMessage::HandShake("worker".to_string()))
                             .await?;
                     }
@@ -59,21 +58,21 @@ async fn handshake<'a>(rhalf: &mut ReadHalf<'a>, whalf: &mut WriteHalf<'a>) -> a
         }
     }
 
-    Ok(())
+    Ok(framed.into_inner())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut stream = TcpStream::connect("127.0.0.1:5677").await?;
+    let stream = TcpStream::connect("127.0.0.1:5677").await?;
     println!("Connected to coordinator");
 
     let socket_addr = stream.local_addr()?;
 
-    let (mut rhalf, mut whalf) = stream.split();
+    let Ok(mut stream) = handshake(stream).await else {
+        anyhow::bail!("handshak failed");
+    };
 
-    if let Err(err) = handshake(&mut rhalf, &mut whalf).await {
-        anyhow::bail!(err);
-    }
+    let (rhalf, whalf) = stream.split();
 
     let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
     let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
@@ -98,7 +97,6 @@ async fn main() -> anyhow::Result<()> {
             }
 
             _ = interval.tick() => {
-                println!("Sending heartbeat to server");
                 framed_writer.send(XMessage::HeartBeat(socket_addr.port())).await?;
             }
         }

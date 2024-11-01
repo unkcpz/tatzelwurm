@@ -1,6 +1,6 @@
 use clap::Parser;
 use futures::SinkExt;
-use tatzelwurm::codec::Operation::{Inspect, Submit};
+use tatzelwurm::codec::Operation::Submit;
 use tatzelwurm::codec::{Codec, XMessage};
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
