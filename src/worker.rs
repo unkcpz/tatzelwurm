@@ -1,10 +1,22 @@
-use std::{collections::HashMap, sync::Arc};
-
 use anyhow::Context;
-use tokio::sync::{mpsc::Sender, Mutex};
+use futures::SinkExt;
+use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
-use crate::codec::IMessage;
+use tokio::sync::{mpsc::Sender, Mutex};
+use tokio::{
+    net::{tcp::WriteHalf, TcpStream},
+    sync::mpsc::{self},
+    time,
+};
+use tokio_stream::StreamExt;
+use tokio_util::codec::{FramedRead, FramedWrite};
+
+use crate::codec::Codec;
+use crate::codec::{IMessage, XMessage};
+use crate::task;
+use crate::task::Table as TaskTable;
 
 #[derive(Debug, Clone)]
 pub struct Worker {
@@ -17,6 +29,8 @@ pub struct Worker {
 }
 
 impl Worker {
+
+    #[must_use]
     pub fn new(tx: Sender<IMessage>) -> Self {
         Self { tx, load: 0 }
     }
@@ -44,6 +58,9 @@ pub struct Table {
     // ??: which Mutex to use, can I use std sync mutex??
     inner: Arc<Mutex<HashMap<Uuid, Worker>>>,
 }
+
+#[allow(dead_code)]
+type WorkerTable = Table;
 
 impl Table {
     #[allow(clippy::new_without_default)]
@@ -92,4 +109,129 @@ impl Table {
             .min_by_key(|&(_, w)| w.load)
             .map(|(&id, _)| id)
     }
+}
+
+pub async fn handle(
+    mut stream: TcpStream,
+    worker_table: Table,
+    task_table: task::Table,
+) -> anyhow::Result<()> {
+    // TODO: check can I use borrowed halves if no moves of half to spawn
+    let (read_half, write_half) = stream.split();
+
+    let mut framed_reader = FramedRead::new(read_half, Codec::<XMessage>::new());
+    let mut framed_writer = FramedWrite::new(write_half, Codec::<XMessage>::new());
+
+    let mut interval = time::interval(Duration::from_millis(2000));
+
+    // TODO: The handshake is the guardian for security, the authentication should
+    // happend here.
+
+    // XXX: different client type: (1) worker (2) actioner from handshaking
+    let (tx, mut rx) = mpsc::channel(100);
+    let worker = Worker::new(tx);
+
+    let worker_id = worker_table.create(worker).await;
+
+    loop {
+        tokio::select! {
+            // message from worker client
+            // this contains heartbeat (only access table when worker dead, the mission then
+            // re-dispateched to other live worker. It should handle timeout for bad network condition,
+            // but that can be complex, not under consideration in the POC implementation)
+            // TODO:
+            // - should reported from worker when the mission is finished
+            // - should also get information from worker complain about the long running
+            // block process if it runs on non-block worker.
+            Some(Ok(msg)) = framed_reader.next() => {
+                handle_worker_xmessage(&msg, &mut framed_writer, &worker_table, &task_table, &worker_id).await?;
+            }
+
+            // message from task assign table lookup
+            // fast-forward to the real worker client
+            // then update the worker booking
+            Some(imsg) = rx.recv() => {
+                if let IMessage::TaskLaunch(id) = imsg {
+                    let xmsg = XMessage::TaskLaunch(id);
+                    framed_writer.send(xmsg).await?;
+                } else {
+                    anyhow::bail!("unknown msg {imsg:?} from assigner.");
+                }
+            }
+
+            _ = interval.tick() => {
+                println!("heartbeat Coordinator -> Worker");
+                framed_writer.send(XMessage::HeartBeat(0)).await?;
+            }
+        }
+    }
+}
+
+async fn handle_worker_xmessage<'a>(
+    msg: &XMessage,
+    framed_writer: &mut FramedWrite<WriteHalf<'a>, Codec<XMessage>>,
+    worker_table: &WorkerTable,
+    task_table: &TaskTable,
+    worker_id: &Uuid,
+) -> anyhow::Result<()> {
+    match msg {
+        XMessage::HeartBeat(port) => {
+            println!("worker {port} alive!");
+        }
+
+        //
+        XMessage::TaskStateChange {
+            id,
+            from: task::State::Submit,
+            to: task::State::Run,
+        } => {
+            if let Some(mut task) = task_table.read(id).await {
+                task.state = task::State::Run;
+                task_table.update(id, task).await?;
+            }
+
+            if let Some(mut worker) = worker_table.read(worker_id).await {
+                worker.incr_load();
+
+                worker_table.update(worker_id, worker).await?;
+            }
+        }
+        XMessage::TaskStateChange {
+            id,
+            from: task::State::Run,
+            to: task::State::Complete,
+        } => {
+            if let Some(mut task) = task_table.read(id).await {
+                task.state = task::State::Complete;
+                task_table.update(id, task).await?;
+            }
+
+            if let Some(mut worker) = worker_table.read(worker_id).await {
+                worker.decr_load();
+
+                worker_table.update(worker_id, worker).await?;
+            }
+        }
+        XMessage::TaskStateChange {
+            id,
+            from: task::State::Run,
+            to: task::State::Except,
+        } => {
+            if let Some(mut task) = task_table.read(id).await {
+                task.state = task::State::Except;
+                task_table.update(id, task).await?;
+            }
+
+            if let Some(mut worker) = worker_table.read(worker_id).await {
+                worker.decr_load();
+
+                worker_table.update(worker_id, worker).await?;
+            }
+        }
+        _ => {
+            println!("main.rs narrate {msg:?}");
+        }
+    }
+
+    Ok(())
 }
