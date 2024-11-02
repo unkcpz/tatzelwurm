@@ -5,6 +5,7 @@ use rmp_serde::{encode, Deserializer};
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
 use uuid::Uuid;
+use byteorder::{BigEndian, ByteOrder};
 
 use crate::task;
 
@@ -35,7 +36,7 @@ pub enum TableOp {
 // XXX: TBD, categorise to Message and InnerOnlyMessage ??
 // The InnerOnlyMessage is for where it can not serialized thus can have oneshot channel attached
 // Initially I want to have a boundary between clients and core components e.g. worker tables.
-// So the communication should always through coordinator. 
+// So the communication should always through coordinator.
 // But if the actor pattern is strictly applied, the boundary can be guaranteed.
 // TODO: should look at rmp-rpc, see if use it or re-implement as same way
 #[derive(Serialize, Deserialize, Debug)]
@@ -147,13 +148,15 @@ where
             return Ok(None);
         }
 
-        let len = src.get_u32() as usize;
+        // Peek at the length without consuming bytes
+        let len = BigEndian::read_u32(&src[..4]) as usize;
 
-        if src.len() < len {
+        if src.len() < 4 + len {
             src.reserve(len - src.len());
             return Ok(None);
         }
 
+        src.advance(4);
         let buf = src.split_to(len);
 
         // Deserialize the MessagePackData

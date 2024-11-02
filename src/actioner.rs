@@ -46,7 +46,7 @@ pub async fn handle(
                 let task = Task::new(0);
                 task_table.create(task).await;
                 let resp_msg = XMessage::BulkMessage(format!(
-                    "{}\n\n{}\n",
+                    "{}\n{}\n",
                     worker_table.render().await,
                     task_table.render().await,
                 ));
