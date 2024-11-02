@@ -12,23 +12,24 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 - [x] worker manage tasks through channels (_launch).
 - [x] enum message with types for easy message transision and pattern match
 - [x] in memory worker table.
-- [x] in memory mission table.
-- [ ] pretty print table and passing it to actioner.
-- [ ] mock the task pool
+- [x] in memory tasks table.
+- [x] pretty print table and passing it to actioner.
+- [x] mock use dummy async sleep tasks.
+- [ ] mock the task pool where the task are constructed to perform.
 - [ ] worker manage tasks through channels (_kill).
 - [ ] task pool mixed of sync/async tasks, benchmark throughput.
 - [ ] table management using actor model instead of using mutex.
 - [ ] worker task dispatch internaly should also by treating every worker as an actor. 
 - [ ] protocol for message transmission.
 - [ ] chores: doc for all func and modules
-- [x] load balancing on assigning missions to workers. (pick least load worker)
+- [x] load balancing on assigning tasks to workers. (pick least load worker)
 - [ ] error handling as lib.
-- [ ] mission cancellation and re-assign.
-- [ ] mission type and priority deligate.
+- [ ] task cancellation and re-assign.
+- [ ] task type and priority deligate.
 - [ ] broadcase message for group operations.
-- [ ] rpc to change the state of single running task.
+- [ ] rpc (message) to change the state of single running task.
 - [ ] persistent store table to disk periodically for recover from reboot.
-- [ ] stress test with pseudo missions (the function re-constructed from files, can be simply async/sync sleep functions)
+- [ ] stress test with pseudo tasks (the function re-constructed from files, can be simply async/sync sleep functions)
 - [ ] pyo3 interface to expose the communicate part for python runner.
 - [ ] stress test and handle the edge cases such as actors are over-loaded.
 - [ ] integrating to test with plumpy.

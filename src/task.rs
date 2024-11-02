@@ -23,7 +23,7 @@ impl fmt::Display for State {
         match self {
             State::Ready => write!(f, "ready"),
             State::Submit => write!(f, "submit"),
-            State::Run => write!(f, "run"),
+            State::Run => write!(f, "running"),
             State::Complete => write!(f, "complete"),
             State::Except => write!(f, "Execpt"),
             State::Killed => write!(f, "Killed"),

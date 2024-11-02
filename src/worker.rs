@@ -185,7 +185,7 @@ pub async fn handle(
 
 async fn handle_worker_xmessage<'a>(
     msg: &XMessage,
-    framed_writer: &mut FramedWrite<WriteHalf<'a>, Codec<XMessage>>,
+    _framed_writer: &mut FramedWrite<WriteHalf<'a>, Codec<XMessage>>,
     worker_table: &WorkerTable,
     task_table: &TaskTable,
     worker_id: &Uuid,

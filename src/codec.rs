@@ -32,6 +32,11 @@ pub enum TableOp {
     Delete,
 }
 
+// XXX: TBD, categorise to Message and InnerOnlyMessage ??
+// The InnerOnlyMessage is for where it can not serialized thus can have oneshot channel attached
+// Initially I want to have a boundary between clients and core components e.g. worker tables.
+// So the communication should always through coordinator. 
+// But if the actor pattern is strictly applied, the boundary can be guaranteed.
 // TODO: should look at rmp-rpc, see if use it or re-implement as same way
 #[derive(Serialize, Deserialize, Debug)]
 pub enum XMessage {
