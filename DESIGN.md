@@ -1,6 +1,9 @@
-# Design
+# How to kill the Rabbit
 
-> **Note:**: 
+The initial goal of this tool is to replace the use of RabbitMQ as message broker in [AiiDA](https://aiida.net).
+The tool however can be more generic as a lightweight task broker that handle the task distribution and task state persistent store with tasks are workflows orchestrated by different programming languages.
+
+> ![Note] 
 > - "worker" and "runner" are used interchangeably.
 > - most of time "coordinator" is the "server".
 > - sometimes the "process" and "mission" is used interchangeably.
@@ -25,7 +28,62 @@ The reason why we should not rely on 3rd-part message broker is not only that th
 Those message broker is design for large distribute system runs for microservices and usually involve with a lot of machines. 
 In AiiDA case, the common scenario is that there are not too many clients (workers/actioners) talk to server (coordinator), thus it requires a very neat implementation that can add more bussiness logic around but still keep it lightweight. 
 
+#### Legacy architecture
+
+It is worth to have a look at the legacy architecture when using RabbitMQ + kiwipy as message broker system for task control.
+The figure shows how a task from generated to it is running at the worker. 
+
+![The architecture summary of the legacy task launch and controlling system design](./misc/tatzelwurm-arch-legacy-arch.svg)
+
+The user has access to the "actioner" to control the state of a task.
+The actioner in AiiDA context is the CLI or the API to communicate with the backend when a task state requires to be changed.
+Typically, here is how a task from it is generated to it is being run at "worker".
+Firstly, user create an AiiDA "Process" (`ProcessFunction`, `CalcJob` or `WorkChain`), in the context here we call it a "task".
+The task object is store into the task pool.
+At the same time, a message is send through the message broker and taken by a worker that there is a task to be proceeded. 
+Finally, the worker construct the task from task pool and run it.
+
+The task consists of its state and how it will involve over the time, so when it just created the task is in its initial state.
+The real entity of the task is stored in the task pool, which in the AiiDA context it is the persistent data storage i.e database + disk-objectstore.
+For the task pool, the task can be deserialized and run by the "worker". (althrough the task pool has all the information to recover a task to run, but it contains the borrowed reference to the environment or source plugin instance, this will be further described in the other post hopefully).
+To let the worker run a task after submitting the task, a message is passing around at the same time through the communicator, which is what I am going to improve by replace the backend design with `tatzelwurm`.
+Two message management patterns are used which are [publisher-subscriber pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber) (?in the context of RMQ it is a work queues?) and [remote procedure call (RPC)/broadcast](https://www.rabbitmq.com/tutorials/tutorial-six-python).
+
+The pub/sub pattern is applied between actioner and multiple workers. 
+The actioner is the publisher that will send the message about which task should be run.
+The workers are the subscribers that take the message and then process on the task. 
+**However**, here comes the problem with pub/sub pattern. 
+After the publisher send a message to the subscriber, it expect an acknowledge from subscriber to tell that the task is taken and is proceeded. 
+If the message not passing to the subscriber, the publisher has the responsibility to send the message again.
+The task in AiiDA can take hours and even days to run to its terminated state and then the acknowledgement message will be sent to the publisher. 
+The RabbitMQ is designed for the ligth message and the default timeout for delivery acknowledgement of RMQ is 30 mins.
+The timeout is not recommended to be changed.
+
+The RPC and broadcast patterns can be described together. 
+They are applied between actioner and the tasks instance directly. 
+The different between RPC and broadcast is that RPC is 1-to-1 while broadcast is in 1-to-N mode. 
+It is not a mistake to use RPC in the AiiDA scenario but there is [a note on RPC](https://www.rabbitmq.com/tutorials/tutorial-six-python#a-note-on-rpc) in the RabbitMQ documentation that "when in doubt avoid RPC. If you can, you should use an asynchronous pipeline".
+I extend the discussion on secion [_Is RPC/broadcast really needed in AiiDA?_](#is-rpc-and-broadcast-really-needed).
+From the architecture figuer, it is interesting to see that the direct interaction between actioner and task acrossing the worker is a bit awkward.
+If skip all the handling of edge cases when the worker is dead.
+You'll find that in the new design, I try to give/ask worker for more responsibility to handle the cancellaition and notification back to the actioner. 
+
+## New architecture
+
+The new design is sketched in the figure below, where I replace "communicator" to "coordinator" by giving more explicit role.
+
+![The architecture summary of the new design](./misc/tatzelwurm-arch-tatz-arch.svg)
+
+- The RMQ as message broker is replaced with the tatzelwurm.
+- The tatzelwurm play two major roles: queue system and message broker.
+- Two tables stored in the disk. Two tables lookup to decide which worker to run which task.
+- The worker has type and will only get certain type of tasks. 
+- The interface is re-interpreted and abstructed as messages.
+- The kiwipy is the interface for actioner and worker on bundle the operations to talk to RMQ, this part is not yet have the decision on design, see section [xxx] for more information. 
+
 ### Design note
+
+The note is this section futher extend on the details of the new architecture.
 
 The related design pattern is:
 - [pub/sub](https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber).
@@ -37,6 +95,8 @@ Not all but quite a bit are inspired by:
 - https://github.com/chrisjsewell/aiida-process-coordinator/discussions/4
 - https://github.com/chrisjsewell/aiida-process-coordinator/issues/7#issuecomment-943361982
 - The AEP mentioned above.
+
+#### The components
 
 1. Task coordinator
 
@@ -76,7 +136,7 @@ For simplicity, the worker should first implemented in python as a `Worker` clas
 There is always a guy look into system from outside and try to make some action. 
 It is us the regular aiida user who is willing to launch, pause, resume, and kill the process.
 I call this role the actioner. 
-The actioner will send the operation through message to coordinator and coordinator then send (or broadcase) the message to workers and take actions to manipulate the processes.
+The actioner will send the operation through message to coordinator and coordinator then send (or broadcast) the message to workers and take actions to manipulate the processes.
 
 #### Key Advantages of Rust Over Python
 
@@ -98,10 +158,10 @@ Rust’s strict compile-time checks lead to a higher degree of confidence in err
 Rust doesn’t just allow developers to skip error handling, unlike Python where errors can bubble up silently, resulting in unhandled exceptions and potential system crashes. 
 By enforcing rigorous handling of potential failures, and ensures that our component will be robust, resilient, and dependable, even under heavy load.
 
-I can image peoplo may against it because they don't familiar with Rust and Rust is well-known for its deep learning curve.
-In order to write a package from scratch maybe difficult and requires a lot effort to learn to make mistakes.
-But read, understand and make further change should be easier with the clear design and the powerful async tools from tokio.
-We all speak English, to write a <Lord of the Rings> is impossible for every of us, but to read and write drived stories should not be a hard task.
+I can image people from the team may against it because they may not at the moment very familiar with Rust and Rust is well-known for its steep learning curve.
+My opinion is, in order to write a package from scratch maybe difficult and requires a lot effort to learn to make mistakes.
+But read, understand and make further change should be easier with the clear design and the powerful asynchronous weapons from Tokio.
+It is like writing AiiDA from scratch is hard, but we can all understand and contribute to it.
 
 #### Two tables
 
@@ -380,10 +440,25 @@ Comments:
 - The key point to check is make sure not new thread is created for each coroutine but the thread/event_loop has the lifetime of worker (this is the new design after move from `tornado` to `asyncio` which can only support one event loop, so probably with handle thread by rust every process can again run on their own event loop??). 
 - It may also be possible (better) to turn the python coroutine into a rust future and then using tokio runtime to poll the future to complete. This require the crate `pyo3_asyncio` as bridge to pass python's coroutine to rust tokio runtime. 
 
+#### The interface for worker and actioner
+
+(comming soon)
+
+- worker and actioner are independent of central design, since the interface can be very flexible as messages and therefore make the use of the system programming language agnostic.
+- But it anyway requires real implementation for the actioner and worker.
+- although the create provide example of worker and actioner by rust, in its first real world use case in AiiDA, the python interface is must to have thing.
+- The interface is the kiwipy as for the RMQ. 
+- In the repo, the interface is put as separate crates and provide with python as must have, and probably with julia and lua in plan.
+
 ### TBD
 
-- Is it better to store checkpoint in a seperate (in legacy it is with process node) table or even in a separate resource? 
-- Who should create (create means initialize the instance, store it is the "DB" and set to the created state) the task? Coordinator or worker or actioner (in legacy it is actioner)?
+- Q: Is it better to store checkpoint in a seperate (in legacy it is with process node) table or even in a separate resource? 
+    - A (@unkcpz): The checkpoint contains two types of information, which are the information to recover the task and the information of task running state. The info to recover the task from task pool should be in the task pool. But the information about running state should be in the other entity with more fast access. These two information are well decoupled.
+    - But this change require more design change in the AiiDA.
+
+- Q: Who should create (create means initialize the instance, store it is the "DB" and set to the created state) the task? Coordinator or worker or actioner (in legacy it is actioner)? 
+    - A (@unkcpz): It should still be the actioner, the architecture overview explain it well.
+    - One of the goal is to make the use of the task broker language agnostic and fit for the workflow of orchestrated in different programming languages.
 
 ### Performance tips
 
