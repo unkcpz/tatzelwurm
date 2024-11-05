@@ -32,6 +32,7 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 - [ ] error handling as lib.
 - [ ] task cancellation and re-assign.
 - [ ] task type and priority deligate.
+- [ ] lease expiration for task and re-assign (reset to ready or pause).
 - [ ] broadcase message for group operations.
 - [ ] rpc (message) to change the state of single running task.
 - [ ] persistent store table to disk periodically for recover from reboot.
