@@ -86,7 +86,11 @@ pub async fn handle(
 
                     task_.state = task::State::Ready;
                     task_table.update(&task_id, task_).await?;
-                    println!("Play task {task_id}: {} -> {}", old_state, task::State::Ready);
+                    println!(
+                        "Play task {task_id}: {} -> {}",
+                        old_state,
+                        task::State::Ready
+                    );
                 }
             }
             _ => {

@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::SinkExt;
 use tatzelwurm::codec::Operation;
 use tatzelwurm::codec::{Codec, XMessage};
@@ -6,13 +6,48 @@ use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
+use uuid::Uuid;
 
-#[derive(Parser, Debug)]
+#[derive(Subcommand)]
+enum TaskCommand {
+    /// Add a new task
+    Add,
+    /// Play a specific task or all tasks
+    Play {
+        /// Task ID to play
+        id: Option<Uuid>,
+        /// Flag to play all tasks
+        #[arg(short, long)]
+        all: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TableCommand {
+    /// Inspect table(s)
+    Inspect,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    // Operations on task(s)
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+
+    // Operations on table(s)
+    Table {
+        #[command(subcommand)]
+        command: TableCommand,
+    },
+}
+
+#[derive(Parser)]
 #[command(version, about, long_about = None)]
-struct Args {
-    /// Operation to take
-    #[arg(short, long)]
-    operation: String,
+struct Cli {
+    #[command(subcommand)]
+    commands: Commands,
 }
 
 // TODO: this can be generic as a client method and used together with worker and even as interface
@@ -48,7 +83,7 @@ async fn handshake<'a>(rhalf: &mut ReadHalf<'a>, whalf: &mut WriteHalf<'a>) -> a
 // with using the comm API provided by the wurm.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
     let mut stream = TcpStream::connect("127.0.0.1:5677").await?;
     println!("Connected to coordinator");
@@ -67,21 +102,37 @@ async fn main() -> anyhow::Result<()> {
     // (in aiida it then will be a DB.)
     // let msg = Message::add_mission(Mission::new());
 
-    match args.operation.as_str() {
-        "inspect" => {
-            framed_writer.send(XMessage::PrintTable()).await?;
-        }
-        "add_task" => {
-            framed_writer.send(XMessage::ActionerOp(Operation::AddTask)).await?;
+    match cli.commands {
+        Commands::Table { command } => match command {
+            TableCommand::Inspect => {
+                framed_writer.send(XMessage::PrintTable()).await?;
+            }
         },
-        "play_all_task" => {
-            framed_writer.send(XMessage::ActionerOp(Operation::PlayAllTask)).await?;
+        Commands::Task { command } => match command {
+            TaskCommand::Add => {
+                framed_writer
+                    .send(XMessage::ActionerOp(Operation::AddTask))
+                    .await?;
+            }
+            TaskCommand::Play { all: true, .. } => {
+                framed_writer
+                    .send(XMessage::ActionerOp(Operation::PlayAllTask))
+                    .await?;
+            }
+            TaskCommand::Play {
+                id,
+                all: false,
+            } => {
+                if let Some(id) = id {
+                    framed_writer
+                        .send(XMessage::ActionerOp(Operation::PlayTask(id)))
+                        .await?;
+                } else {
+                    println!("provide the task id.");
+                }
+            }
+            _ => todo!(),
         },
-        _ => {
-            framed_writer
-                .send(XMessage::BulkMessage("useless op".to_string()))
-                .await?;
-        }
     }
 
     if let Some(Ok(msg)) = framed_reader.next().await {

@@ -23,7 +23,7 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 - [ ] worker manage tasks through channels (_kill).
 - [ ] task pool mixed of sync/async tasks, benchmark throughput.
 - [x] create -> ready state by play signal.
-- [ ] well CLI for register and play a single task.
+- [x] well CLI for register and play a single task.
 - [ ] table management using actor model instead of using mutex.
 - [ ] worker task dispatch internaly should also by treating every worker as an actor. 
 - [ ] protocol for message transmission.
