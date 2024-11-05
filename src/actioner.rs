@@ -44,23 +44,50 @@ pub async fn handle(
 
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal n/a -> Created
-            XMessage::ActionerOp(Operation::Submit) => {
+            XMessage::ActionerOp(Operation::AddTask) => {
                 let task_ = Task::new(0);
-                let id = task_table.create(task_.clone()).await;
-                
-                ///////////
-                // XXX: this should be by another signal
-                let mut task_ = task_.clone();
-                task_.state = task::State::Ready;
-                task_table.update(&id, task_).await?;
-                ////////////
-                
+                task_table.create(task_.clone()).await;
+
                 let resp_msg = XMessage::BulkMessage(format!(
                     "{}\n{}\n",
                     worker_table.render().await,
                     task_table.render().await,
                 ));
                 framed_writer.send(resp_msg).await?;
+            }
+            // Signal direction - src: actioner, dst: coordinator
+            // Handle signal x -> Ready
+            XMessage::ActionerOp(Operation::PlayTask(id)) => {
+                let task_ = task_table.read(&id).await;
+                if let Some(mut task_) = task_ {
+                    task_.state = task::State::Ready;
+                    task_table.update(&id, task_).await?;
+
+                    let resp_msg = XMessage::BulkMessage(format!(
+                        "{}\n{}\n",
+                        worker_table.render().await,
+                        task_table.render().await,
+                    ));
+                    framed_writer.send(resp_msg).await?;
+                }
+            }
+            // Signal direction - src: actioner, dst: coordinator
+            // Handle signal all pause/created x -> Ready
+            XMessage::ActionerOp(Operation::PlayAllTask) => {
+                // TODO: also include pause state to resume
+                let resumable_tasks = task_table.filter_by_state(task::State::Created).await;
+
+                for (task_id, _) in resumable_tasks {
+                    let Some(mut task_) = task_table.read(&task_id).await else {
+                        continue;
+                    };
+                    // XXX: check, is cloned?? so the old_state is different from after changed
+                    let old_state = task_.state;
+
+                    task_.state = task::State::Ready;
+                    task_table.update(&task_id, task_).await?;
+                    println!("Play task {task_id}: {} -> {}", old_state, task::State::Ready);
+                }
             }
             _ => {
                 let resp_msg = XMessage::BulkMessage(format!(

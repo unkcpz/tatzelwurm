@@ -13,7 +13,9 @@ use crate::task;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Operation {
     Inspect,
-    Submit,
+    AddTask,
+    PlayTask(Uuid),
+    PlayAllTask,
 
     // CURD to the table (s)
     Create,

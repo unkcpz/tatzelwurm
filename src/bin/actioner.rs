@@ -1,6 +1,6 @@
 use clap::Parser;
 use futures::SinkExt;
-use tatzelwurm::codec::Operation::Submit;
+use tatzelwurm::codec::Operation;
 use tatzelwurm::codec::{Codec, XMessage};
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
@@ -71,9 +71,12 @@ async fn main() -> anyhow::Result<()> {
         "inspect" => {
             framed_writer.send(XMessage::PrintTable()).await?;
         }
-        "submit" => {
-            framed_writer.send(XMessage::ActionerOp(Submit)).await?;
-        }
+        "add_task" => {
+            framed_writer.send(XMessage::ActionerOp(Operation::AddTask)).await?;
+        },
+        "play_all_task" => {
+            framed_writer.send(XMessage::ActionerOp(Operation::PlayAllTask)).await?;
+        },
         _ => {
             framed_writer
                 .send(XMessage::BulkMessage("useless op".to_string()))
