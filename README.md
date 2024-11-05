@@ -10,13 +10,13 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 
 ## How to play with the prototype
 
-Rust is a compiled language so the binaries can be download from  and run.
+Rust is a compiled language so you can download the binaries from [Releases](https://github.com/unkcpz/tatzelwurm/releases) with your PC architecture.
 Three binaries are provided for the coordinator, actioner and worker respectively.
 
-In different terminal or multiplexer, run
+Decompress the file and in different terminals or multiplexers, run
 
 ```bash
-./coordinator
+./tatzelwurm
 ```
 
 to start the coordinator.
@@ -24,9 +24,9 @@ to start the coordinator.
 Run
 
 ```bash
-./actioner task add
-./actioner task play <id>
-./actioner task play -a
+./actionwurm task add
+./actionwurm task play <id>
+./actionwurm task play -a
 ```
 
 to add task to table and run it.
@@ -34,7 +34,7 @@ to add task to table and run it.
 Start the worker, multiple workers if want to test load balancing.
 
 ```bash
-./worker
+./workwurm
 ```
 
 If you want to compile from source code, you can: 

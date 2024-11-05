@@ -21,13 +21,13 @@ tokio-util = { version = "0.7.12", features = ["codec"] }
 uuid = { version = "1.10.0", features = ["fast-rng", "serde", "v4"] }
 
 [[bin]]
-name = "coordinator"
+name = "tatzelwurm"
 path = "src/main.rs"
 
 [[bin]]
-name = "worker"
+name = "workwurm"
 path = "src/bin/worker.rs"
 
 [[bin]]
-name = "actioner"
+name = "actionwurm"
 path = "src/bin/actioner.rs"

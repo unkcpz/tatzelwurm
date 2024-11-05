@@ -1,0 +1,105 @@
+name: Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 23 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Create tag
+        uses: rickstaa/action-create-tag@v1
+        with:
+          tag: nightly
+          force_push_tag: true
+
+  build-and-upload:
+    name: Build and upload
+    runs-on: ${{ matrix.os }}
+    needs: [ create-tag ]
+
+    strategy:
+      matrix:
+        # You can add more, for any target you'd like!
+        include:
+          - build: linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          - build: macos-amd
+            os: macos-latest
+            target: x86_64-apple-darwin
+
+          - build: macos-amd
+            os: macos-latest
+            target: aarch64-apple-darwin
+
+          - build: windows-gnu
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the release version from the tag
+        run: echo "VERSION=nightly-$(date +'%Y-%m-%d')-${{ github.sha }}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Binary
+        run: cargo build --verbose --locked --release --target ${{ matrix.target }}
+
+      - name: Build archive
+        shell: bash
+        run: |
+          binary_names=("tatzelwurm" "workwurm" "actionwurm")
+          dirname="${binary_names[0]}-${{ env.VERSION }}-${{ matrix.target }}"
+          mkdir "$dirname"
+
+          # Move each binary to the directory
+          for binary_name in "${binary_names[@]}"; do
+            if [ "${{ matrix.os }}" = "windows-latest" ]; then
+              mv "target/${{ matrix.target }}/release/$binary_name.exe" "${dirname}"
+            else
+              mv "target/${{ matrix.target }}/release/$binary_name" "${dirname}"
+            fi
+          done
+
+          # Create archive based on OS
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a "$dirname.zip" "$dirname"
+            echo "ASSET=$dirname.zip" >> $GITHUB_ENV
+          else
+            tar -czf "$dirname.tar.gz" "$dirname"
+            echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Prepare release name
+        run: |
+          echo "RELEASE_NAME=Nightly build $(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.RELEASE_NAME }}
+          tag_name: "nightly"
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            ${{ env.ASSET }}
+
