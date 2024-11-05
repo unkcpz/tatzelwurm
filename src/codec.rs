@@ -16,6 +16,7 @@ pub enum Operation {
     AddTask,
     PlayTask(Uuid),
     PlayAllTask,
+    KillTask(Uuid),
 
     // CURD to the table (s)
     Create,

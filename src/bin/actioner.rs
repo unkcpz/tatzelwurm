@@ -12,6 +12,7 @@ use uuid::Uuid;
 enum TaskCommand {
     /// Add a new task
     Add,
+
     /// Play a specific task or all tasks
     Play {
         /// Task ID to play
@@ -19,6 +20,12 @@ enum TaskCommand {
         /// Flag to play all tasks
         #[arg(short, long)]
         all: bool,
+    },
+
+    /// Kill a specific task
+    Kill {
+        /// Task ID to play
+        id: Option<Uuid>,
     },
 }
 
@@ -119,13 +126,19 @@ async fn main() -> anyhow::Result<()> {
                     .send(XMessage::ActionerOp(Operation::PlayAllTask))
                     .await?;
             }
-            TaskCommand::Play {
-                id,
-                all: false,
-            } => {
+            TaskCommand::Play { id, all: false } => {
                 if let Some(id) = id {
                     framed_writer
                         .send(XMessage::ActionerOp(Operation::PlayTask(id)))
+                        .await?;
+                } else {
+                    println!("provide the task id.");
+                }
+            }
+            TaskCommand::Kill { id } => {
+                if let Some(id) = id {
+                    framed_writer
+                        .send(XMessage::ActionerOp(Operation::KillTask(id)))
                         .await?;
                 } else {
                     println!("provide the task id.");

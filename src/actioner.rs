@@ -45,6 +45,7 @@ pub async fn handle(
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal n/a -> Created
             XMessage::ActionerOp(Operation::AddTask) => {
+                // TODO: need to check if the task exist
                 let task_ = Task::new(0);
                 task_table.create(task_.clone()).await;
 
@@ -58,6 +59,7 @@ pub async fn handle(
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal x -> Ready
             XMessage::ActionerOp(Operation::PlayTask(id)) => {
+                // TODO: need to check init state is able to be played
                 let task_ = task_table.read(&id).await;
                 if let Some(mut task_) = task_ {
                     task_.state = task::State::Ready;
@@ -91,6 +93,24 @@ pub async fn handle(
                         old_state,
                         task::State::Ready
                     );
+                }
+            }
+            // Signal direction - src: actioner, dst: coordinator
+            // Handle signal x -> Terminated(-1)
+            XMessage::ActionerOp(Operation::KillTask(id)) => {
+                let task_ = task_table.read(&id).await;
+                if let Some(mut task_) = task_ {
+                    task_.state = task::State::Terminated(-1);
+                    task_table.update(&id, task_).await?;
+                    
+                    // TODO: also sending a cancelling signal to the runnning task on worker
+
+                    let resp_msg = XMessage::BulkMessage(format!(
+                        "{}\n{}\n",
+                        worker_table.render().await,
+                        task_table.render().await,
+                    ));
+                    framed_writer.send(resp_msg).await?;
                 }
             }
             _ => {
