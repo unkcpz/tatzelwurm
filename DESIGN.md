@@ -512,7 +512,7 @@ Comments:
 The Rust application after compiled will be a binary.
 There may be two ways to run it from AiiDA:
 
-- Get the binary with install the pyo3 wrapper lib and put the binary of corresponding OS architecture to the python bin path.
+- Get the binary with install the pyo3 wrapper lib and put the binary of corresponding OS architecture to the python bin path. In AiiDA maybe keep on using circus to mornitoring the start services.
 - Expose the API and have a python coordinator "main" as `main.rs` which is less than 100 lines. Not sure about the performance since python has GIL!!
 
 ### TBD

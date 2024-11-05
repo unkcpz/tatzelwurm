@@ -4,9 +4,62 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 
 - The design consideration is in [DESIGN.md](https://github.com/unkcpz/tatzelwurm/blob/main/DESIGN.md)
 
-#### Architecture
+## Architecture
 
 ![The architecture summary of the new design](./misc/tatzelwurm-arch-tatz-arch.svg)
+
+## How to play with the prototype
+
+Rust is a compiled language so the binaries can be download from  and run.
+Three binaries are provided for the coordinator, actioner and worker respectively.
+
+In different terminal or multiplexer, run
+
+```bash
+./coordinator
+```
+
+to start the coordinator.
+
+Run
+
+```bash
+./actioner task add
+./actioner task play <id>
+./actioner task play -a
+```
+
+to add task to table and run it.
+
+Start the worker, multiple workers if want to test load balancing.
+
+```bash
+./worker
+```
+
+If you want to compile from source code, you can: 
+
+[Install Rust](https://www.rust-lang.org/tools/install).
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Clone the repo
+
+```bash
+git clone https://github.com/unkcpz/tatzelwurm.git && cd tatzelwurm
+```
+
+Build the project
+
+```bash
+cargo build --release
+```
+
+The binaries will be in folder `target/release/`.
+Then run binaries as described above.
+
 
 ## Progress
 
@@ -44,3 +97,4 @@ tatzelwurm is a lightweight persistent queue system to deal with process calls a
 - [ ] settle all the todos (should do this frequently when it is at proper timing)
 - [ ] Polish the design note (should do this frequently when it is at proper timing)
 - [ ] Move aiida specific design note (comparison with the legacy RMQ parts) to wiki for reference, and leave the generic design part in the design note.
+- [ ] Take a look at hyperequeue to learn good design and Rust technology.
