@@ -195,7 +195,8 @@ async fn handle_worker_xmessage<'a>(
             println!("worker {port} alive!");
         }
 
-        //
+        // Signal direction - src: worker, dst: coordinator 
+        // Handle signal submit -> run
         XMessage::TaskStateChange {
             id,
             from: task::State::Submit,
@@ -212,13 +213,16 @@ async fn handle_worker_xmessage<'a>(
                 worker_table.update(worker_id, worker).await?;
             }
         }
+
+        // Signal direction - src: worker, dst: coordinator 
+        // Handle signal run -> complete
         XMessage::TaskStateChange {
             id,
             from: task::State::Run,
-            to: task::State::Complete,
+            to: task::State::Terminated(0),
         } => {
             if let Some(mut task) = task_table.read(id).await {
-                task.state = task::State::Complete;
+                task.state = task::State::Terminated(0);
                 task_table.update(id, task).await?;
             }
 
@@ -228,13 +232,16 @@ async fn handle_worker_xmessage<'a>(
                 worker_table.update(worker_id, worker).await?;
             }
         }
+
+        // Signal direction - src: worker, dst: coordinator 
+        // Handle signal run -> except
         XMessage::TaskStateChange {
             id,
             from: task::State::Run,
-            to: task::State::Except,
+            to: task::State::Terminated(x),
         } => {
             if let Some(mut task) = task_table.read(id).await {
-                task.state = task::State::Except;
+                task.state = task::State::Terminated(*x);
                 task_table.update(id, task).await?;
             }
 

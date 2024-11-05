@@ -170,6 +170,19 @@ The two tables are workers table which record the workers state information and 
 
 Everytime when the coordinator "look at" two tables, it needs to make the decision on what operation needs to be take.
 
+#### Task states transition
+
+The task has its states and the state will be changed upon signal received from actioner/worker/assigner.
+The task in `tatzelwurm` has its own states transition logic and may different from states definition from its real entity in task pool (e.g. in AiiDA).
+In `tatzelwurm` the state is for managing the state transition by operations applied and is a marker to know if the operation valid to take.
+
+- `Created`: ( x -> `Ready`, x -> `Pause`) when the task entity is push to task pool and its existence signal registered to the coordinator. In this state, the assigner will **NOT** trigger this task to run.
+- `Ready`: (`Created` -> x, x -> `Submit`, x -> `Pause`, `Pause` -> x) is the only state that will be picked by the assigner and send to worker to be proceeded.
+- `Submit`: (`Ready` -> x, x -> `Run`, `x` -> `Pause`) after assigner send it to a worker and worker not yet start working on it.
+- `Pause`: (`Created` -> x, `Ready` -> x, `Submit` -> x, `Run` -> x) is a buffer and fallback state that hold the assigner to assign it to worker. It waits for a signal from actioner to resume. If the task is in `Run` state and the worker lost heartbeat, the coordinator will transite it to `Pause`.
+- `Run`: (`Submit` -> x) the worker is working on it.
+- `Terminated(exit_code)` (`Run` -> x) the worker finish on it and send the signal back. The exit_code 0 for complete, -1 for killed and other positive number for except with certain exit code.
+
 #### Message types
 
 In the whole design, the message is used to communicate between different entities. 

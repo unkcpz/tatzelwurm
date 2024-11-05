@@ -140,14 +140,14 @@ async fn run_task<'a>(id: Uuid, tx: mpsc::Sender<XMessage>) -> anyhow::Result<()
         let msg = XMessage::TaskStateChange {
             id,
             from: TaskState::Run,
-            to: TaskState::Complete,
+            to: TaskState::Terminated(0),
         };
         tx.send(msg).await?;
     } else {
         let msg = XMessage::TaskStateChange {
             id,
             from: TaskState::Run,
-            to: TaskState::Except,
+            to: TaskState::Terminated(1), // TODO: exit_code from ack_rx
         };
         tx.send(msg).await?;
     }

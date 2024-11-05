@@ -10,23 +10,31 @@ use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum State {
+    Created,
     Ready,
     Submit,
+    Pause,
     Run,
-    Complete,
-    Except,
-    Killed,
+    Terminated(i8),
 }
 
 impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            State::Created => write!(f, "created"),
             State::Ready => write!(f, "ready"),
             State::Submit => write!(f, "submit"),
+            State::Pause => write!(f, "pause"),
             State::Run => write!(f, "running"),
-            State::Complete => write!(f, "complete"),
-            State::Except => write!(f, "Execpt"),
-            State::Killed => write!(f, "Killed"),
+            State::Terminated(exit_code) if *exit_code == 0 => {
+                write!(f, "complete")
+            },
+            State::Terminated(exit_code) if *exit_code == -1 => {
+                write!(f, "killed")
+            },
+            State::Terminated(exit_code) => {
+                write!(f, "terminated(exit_code={exit_code})")
+            },
         }
     }
 }
@@ -42,7 +50,7 @@ impl Task {
     #[must_use]
     pub fn new(priority: u32) -> Self {
         Self {
-            state: State::Ready,
+            state: State::Created,
             priority,
             worker: None,
         }

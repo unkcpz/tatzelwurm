@@ -41,10 +41,20 @@ pub async fn handle(
                 ));
                 framed_writer.send(resp_msg).await?;
             }
-            // placeholder, add a random test task to table
+
+            // Signal direction - src: actioner, dst: coordinator
+            // Handle signal n/a -> Created
             XMessage::ActionerOp(Operation::Submit) => {
-                let task = Task::new(0);
-                task_table.create(task).await;
+                let task_ = Task::new(0);
+                let id = task_table.create(task_.clone()).await;
+                
+                ///////////
+                // XXX: this should be by another signal
+                let mut task_ = task_.clone();
+                task_.state = task::State::Ready;
+                task_table.update(&id, task_).await?;
+                ////////////
+                
                 let resp_msg = XMessage::BulkMessage(format!(
                     "{}\n{}\n",
                     worker_table.render().await,
