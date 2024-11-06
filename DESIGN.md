@@ -1,37 +1,42 @@
 # How to kill the Rabbit
 
-The initial goal of this tool is to replace the use of RabbitMQ as message broker in [AiiDA](https://aiida.net).
+This AEP is copied from the design note of the tool for replacing the RabbitMQ + kiwipy.
+I call this tool [`tatzelwurm`](https://github.com/unkcpz/tatzelwurm) in this documentation.
+
+The initial goal of the tool is to replace the use of RabbitMQ as message broker in [AiiDA](https://aiida.net).
 The tool however can be more generic as a lightweight task broker that handle the task distribution and task state persistent store with tasks are workflows orchestrated by different programming languages.
 
 > ![Note] 
 > - "worker" and "runner" are used interchangeably.
 > - most of time "coordinator" is the "server".
-> - sometimes the "process" and "mission" is used interchangeably.
+> - sometimes the "process", "mission" and "task" is used interchangeably.
 
 ### When we say replace RMQ what we are talking about?
 
-In addition to the [AEP PR#30: Remove the dependence on RabbitMQ](https://github.com/aiidateam/AEP/pull/30)
+This section is the extention of [AEP PR#30: Remove the dependence on RabbitMQ](https://github.com/aiidateam/AEP/pull/30). 
+After all the design details get enought test, to AEPs will be combined.
 
-We are talking about remove `kiwipy` as the communicator in AiiDA, it is strongly depended by AiiDA through the [`plumpy`](https://github.com/aiidateam/plumpy). 
-The `plumpy` is the real internal engine on top of which the `aiida-core` extent the `Process` to be `ProcessFunction`, `CalcJob` and `WorkChain`. 
+When we say replace RMQ, we are talking about remove `kiwipy` as the communicator in AiiDA, it is a strong denpendency of AiiDA through the [`plumpy`](https://github.com/aiidateam/plumpy). 
+The `plumpy` is the real internal engine implementation on top of which the `aiida-core` extent the `Process` to be `ProcessFunction`, `CalcJob` and `WorkChain`. 
 Meanwhile, the `plumpy` also define the base interfaces on how to persistent store the `Process` state so that can be recovered from checkpoints. 
-The `plumpy` need `kiwipy` to provide interface to talk to RMQ to manage the process running on the specific event loop of a worker's interpretor (the event loop is then under the management of `aiida-core` inside daemon runner). 
+The `plumpy` need `kiwipy` to provide interface to talk to the RabbitMQ service to manage the process running on the specific event loop of a worker's interpretor (the event loop is then under the management of `aiida-core` inside a daemon runner). 
 
 The connections between `plumpy` and `kiwipy` is actually not too many as I originally thought, the `plumpy` treat `kiwipy` as a so called "Communicator".
-The most important interface is `add_task_subscriber` which register a function (coroutine) that upon consuming message from RMQ the worker side decide how to deal with the `Process`. 
-Two parts require this `add_task_subscriber` interface.
+The most important interface is `add_task_subscriber` which register an async function (coroutine) that upon consuming message from RMQ the worker side decide how to deal with the `Process`. 
+Two parts use this `add_task_subscriber` interface.
 
 - The `Process` can be `launch` or `continue` by the `ProcessLauncher` registered with its `__call__` (queue up tasks). 
 - The `Process` itself when initilized, will registered the `message_reciever` to listen to queue when there are action signals to `play`, `pause` or `kill` the `Process`.
 
-The reason why we should not rely on 3rd-part message broker is not only that the extra service is hard to deploy, but also we use it in a in proper way which will show in more detail in the legacy architecture description below.
-Those message broker is design for large distribute system runs for microservices and usually involve with a lot of machines. 
-In AiiDA case, the common scenario is that there are not too many clients (workers/actioners) talk to server (coordinator), thus it requires a very neat implementation that can add more bussiness logic around but still keep it lightweight. 
+The reason why we should not rely on 3rd-part message broker is not only that the extra service is hard to deploy, but also we use it in an inproper way.
+I will show more detail in the legacy architecture description below.
+RabbitMQ as a message broker is design for large distribute system runs for microservices and usually involve with a lot of machines. 
+In AiiDA case, the common scenario is that there are not too many clients (workers/actioners) talk to server (coordinator), thus it requires a very neat implementation that can add more bussiness logic around but still kept lightweight. 
 
 #### Legacy architecture
 
 It is worth to have a look at the legacy architecture when using RabbitMQ + kiwipy as message broker system for task control.
-The figure shows the liftspan of a task from bing generated to it is running at the worker. 
+The figure shows the liftspan of a task from being generated to it is running on a worker. 
 
 ![The architecture summary of the legacy task launch and controlling system design](./misc/tatzelwurm-arch-legacy-arch.svg)
 
@@ -39,9 +44,9 @@ The user has access to the "actioner" to control the state of a task.
 The actioner in AiiDA context is the CLI or the API to communicate with the backend when a task state requires to be changed.
 Typically, here is how a task from it is generated to it is being run at "worker".
 Firstly, user create an AiiDA "Process" (`ProcessFunction`, `CalcJob` or `WorkChain`), in the context here we call it a "task".
-The task object is store into the task pool.
-At the same time, a message is send through the message broker and taken by a worker that there is a task to be proceeded. 
-Finally, the worker construct the task from task pool and run it.
+The task object is stored in the task pool.
+At the same time, a message is sent through the message broker and message is taken by a worker so the worker knows there is a task to be proceeded. 
+Finally, the worker construct the task from task pool and run it in its event loop.
 
 The task consists of its state and how it will involve over the time, so when it just created the task is in its initial state.
 The real entity of the task is stored in the task pool, which in the AiiDA context it is the persistent data storage i.e database + disk-objectstore.
@@ -54,7 +59,7 @@ The actioner is the publisher that will send the message about which task should
 The workers are the subscribers that take the message and then process on the task. 
 **However**, here comes the problem with pub/sub pattern. 
 After the publisher send a message to the subscriber, it expect an acknowledge from subscriber to tell that the task is taken and is proceeded. 
-If the message not passing to the subscriber, the publisher has the responsibility to send the message to make the task being taken by other worker.
+If the message is not passing to the subscriber, the publisher has the responsibility to send the message to make the task being taken by other worker.
 The task in AiiDA can take hours and even days to run to its terminated state and until the acknowledgement message be sent to the publisher. 
 The RabbitMQ is designed for the ligth message and the default timeout for delivery acknowledgement of RMQ is 30 mins.
 Meanwhile, the timeout is not recommended to be changed.
@@ -86,14 +91,12 @@ The worker has types and will only get certain type of tasks.
 The goal is to distinguish the synchronous task which can block the running thread from asynchronous task that can just added to the runtime and run concurrently.
 
 The message is passing between different entity over tcp wire, which for future design that the worker and actioner can be run on other machine.
-The message is passing between different entity over tcp wire, which for future design that the worker and actioner can be run on other machine.
 Different message types for different operation purposes are summarized at [Message Types section](#message-types).
 
 Internally the messages are passing through channels and I tries to apply the actor pattern as possible to get high throughput in concurrent scenario.
-Internally the messages are passing through channels and I tries to apply the actor pattern as possible to get high throughput in concurrent scenario.
 The interface with the coordinator alone is re-interpreted and abstracted as messages.
 Therefore in principle the actioner and worker can be implemented in any programming language by just follow the massege protocol.
-However, the it is not trivial to implement all the communication needed from handshake to get notification back and forth between entities. 
+However, it is not trivial to implement all the communication needed from handshake to get notification back and forth between entities. 
 The `kiwipy` in AiiDA servers as the role to provide the wrappered methods to talk between different components over RabbitMQ.
 Therefore, `kiwipy` is the interface for actioner and worker on bundle the operations to talk to RMQ, as the replacement, in `tatzelwurm` I should provide the python interface with methods ready to be used for sending and consuming certain type of MessagePack meesage.
 
@@ -119,21 +122,21 @@ Not all but quite a bit are inspired by:
 The coordinator plays two major roles. 
 It is a message broker that communicate with workers connected and meanwhile it is a queue system that knows **when** to send **which** task to run on **which** worker with load balencing.
 
-In order to replace RMQ for queuing the tasks and recover the tasks state after reboot the machine, it need the functionality to persistent the task list on the disk. 
-Different from RMQ which lack of API to introspect task queues to determine the task list and task priorities, the coordinator has the task table with task can tagged with multiple properties such as priorities and it blocking type.
+In order to replace RMQ for queuing the tasks and recover the tasks state after reboot the machine, it needs the functionality to persistent the task list on the disk. 
+Different from RMQ which lack of API to introspect task queues to determine the task list and task priorities, the coordinator has the task table with task can be tagged with multiple properties such as priority and it blocking type.
 Using Rust is for the edging performance that can potentially handle millions of processes in the foreseeable future. 
 
 Here are requirements for the coordinator:
 
-- It runs as a server and waiting for messages from/to actioner/workers. The workers are client that can run on a python interpreter with an event loop and the actioner can send message to trigger the operation to send bundled message to workers.
+- It runs as a server and waiting for messages from/to actioner/workers. The workers are clients that can run on a python interpreter with an event loop and the actioner can send message to trigger the operation to send bundled messages to workers.
 - The server will listen for incoming tasks, manage worker connections (handshake and monitoring the heartbeat of the worker), and handle the load balencing of tasks to workers.
 - There are cases the workers will closed without finishing its tasks, when this happened coordinator need to know the state change of workers and resend the unfinished tasks to another worker. 
-- The task coordinator implement persistent task queuing so that tasks can be recovered after a machine reboot. The go to solution I can see is using an embeded DB like RocksDB or use Redis with its RDB+AOL. 
+- The task coordinator implement persistent task queuing so that tasks can be recovered after a machine reboot. The go to solution I can see is using an embeded DB like `RocksDB` or use `Redis` with its RDB+AOL. 
 - For task queue persistence (continue of the point above): the embedeb DB only allowed one connection and this connection is from the coordinator (therefore, only the coordinator is directly communicate to the embedeb DB). Tt communicates with the worker and when worker responds, coordinater should updates tasks (e.g. `pending`, `in_progress`, `completed`) into the serialized task data. (More details are discussed in later sections.) 
 
 2. Worker
 
-The worker is responsible for running python functions (or more generic if the I can provide message interfacein Rust, I believe it is not hard to build on top the wrapper to different languages, such as Julia and Lua).
+The worker is responsible for running python functions (or more generic if the I can provide message interface in Rust, I believe it is not hard to build on top the wrapper to different languages, such as Julia and Lua).
 In the context of plumpy, it is for running python coroutines by place the coroutines to the event loop that bind to the worker interpretor. 
 There are two ways of implementing the worker, one is having the worker as client and implemented in python, the harder way is implement worker in rust and expose the interface to python using `pyo3`.
 (? May possible to further seperate define the functionalitios of worker. It needs to communicate and running things. The communicate port is de/serializing the data and this port can definitly use the API exposed through `pyo3` here.)
@@ -148,20 +151,26 @@ Here are requirements for the worker:
 - Each worker runs an event loop in Python, which waits for messages from the rust server. 
 - Upon receiving a message, the worker loads and executes the task. It should acknowledge back to coordinator that it get the task and keep on update the state of task running so the coordinator knows its loading. 
 - The first time when the worker start, it need to register to the coordinator a long-live task subscriber through handshake and say it is ready for launching the task and continuing the task. This subscriber will be removed with closing the worker or the coordinator is gone.
-- Each real task (corresponding to the `Process` in plumpy) is proceeded individually. Once the task to comleted, the task's state is marked as terminated and remove from coordinator's booking. 
+- Each real task (corresponding to the `Process` in plumpy) is proceeded individually. Once a task is completed, its state is marked as terminated and remove from coordinator's task booking. 
 - Only one worker working on a single task at a time. The worker will automatic requeue the tasks if the worker died for whatever reason.
 
 3. Actioner
 
 There is always a guy look into system from outside and try to make some actions. 
 In the context of AiiDA, it is us the regular user who is willing to launch, pause, resume, and kill the process.
-I call this role the actioner. 
+I call it actioner. 
 The actioner will send the bundle of operations through a defined message that follow certain protocol to the coordinator. Coordinator then send or broadcast the message to workers and take actions to manipulate the tasks.
 
-#### Key Advantages of Rust Over Python
+#### Advantages of Rust Over Python in asynchronous programming
 
-In the initial goal of language design, Rust was putting [fearless concurrency](https://blog.rust-lang.org/2015/04/10/Fearless-Concurrency.html) in its core, with the help of borrow checker and lifetime.
+In the initial goal of language design, Rust was putting [fearless concurrency](https://blog.rust-lang.org/2015/04/10/Fearless-Concurrency.html) in its core, with the help of concepts like ownership and lifetime.
 Over the year, from AiiDA team the developers worked on engine were very suffered from debugging the code with `asyncio`, more or less I believe.
+
+I can image people from the team may against it because they may not at the moment very familiar with Rust and Rust is well-known for its steep learning curve for beginners.
+However, the effort is well worth it: 
+Rust’s design is incredibly robust for complex and performance-intensive applications, especially when it comes to asynchronous programming. 
+Building a package from scratch might seem challenging, but with a clear design, using Rust and its powerful async capabilities, like Tokio, enables us to create highly performant and scalable software that’s more reliable than Python for this specific case.
+By embracing Rust, we’re not only building a solution that performs better, but we’re also investing in a codebase that’s safer and more maintainable in the long run.
 
 Rust bring memory safety without GC.
 Memory issues are a major pain point in high-throughput systems, and Rust offers a unique advantage with its zero-cost abstractions for memory safety. 
@@ -178,11 +187,6 @@ Rust’s strict compile-time checks lead to a higher degree of confidence in err
 Rust doesn’t just allow developers to skip error handling, unlike Python where errors can bubble up silently, resulting in unhandled exceptions and potential system crashes. 
 By enforcing rigorous handling of potential failures, and ensures that our component will be robust, resilient, and dependable, even under heavy load.
 
-I can image people from the team may against it because they may not at the moment very familiar with Rust and Rust is well-known for its steep learning curve for the beginner.
-My opinion is, in order to write a package from scratch maybe difficult and requires a lot effort to learn and to make mistakes.
-But read, understand and make further change should be easier if the design is very clear and the powerful asynchronous weapons from Tokio is used.
-It is like writing AiiDA from scratch is hard, but we can all understand and contribute to it.
-
 #### Two tables
 
 The coordinator should grab two tables to operate on its tasks.
@@ -192,7 +196,7 @@ Everytime when the coordinator "look at" two tables, it needs to make the decisi
 An actor called "assigner" runs concurrently and check two tables periodically.
 In every lookup, it loop over all ready to run tasks and pick a worker with lowest load from sepecific type and ask the worker to pick the task (by deserializing from task pool) to run.
 
-The worker table has keys that is the Uuid of worker.
+The worker table has keys that is the uuid of worker.
 Every item is a worker registred record the current state and meta-info of the worker. 
 
 The worker current state and meta-info include:
@@ -200,7 +204,7 @@ The worker current state and meta-info include:
 - The worker type that distinguish on what type task can be consumed by the worker.
 - The load that is the number of tasks running in the worker.
 - The number of tasks limit, above which the worker will not be sent with more tasks to consume.
-- The lease expired time after which the worker will be regarded as dead. The field is update by the heartbeat sent from worker.
+- The lease expired time, after which the worker will be regarded as dead. The field is update by the heartbeat sent from worker.
 
 The task table has keys that is the uuid of tatks.
 Every item is a task mirror which has its archetype in the task pool.
