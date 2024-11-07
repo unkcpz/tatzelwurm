@@ -11,7 +11,11 @@ use uuid::Uuid;
 #[derive(Subcommand)]
 enum TaskCommand {
     /// Add a new task
-    Add,
+    Add {
+        // Number of tasks
+        #[arg(short)]
+        number: u32,
+    },
 
     /// Play a specific task or all tasks
     Play {
@@ -116,9 +120,9 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Commands::Task { command } => match command {
-            TaskCommand::Add => {
+            TaskCommand::Add { number } => {
                 framed_writer
-                    .send(XMessage::ActionerOp(Operation::AddTask))
+                    .send(XMessage::ActionerOp(Operation::AddTask(number)))
                     .await?;
             }
             TaskCommand::Play { all: true, .. } => {

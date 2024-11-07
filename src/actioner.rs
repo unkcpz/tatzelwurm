@@ -44,11 +44,14 @@ pub async fn handle(
 
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal n/a -> Created
-            XMessage::ActionerOp(Operation::AddTask) => {
+            XMessage::ActionerOp(Operation::AddTask(n)) => {
                 // TODO: need to check if the task exist
-                let task_ = Task::new(0);
-                task_table.create(task_.clone()).await;
+                for _ in 0..n {
+                    let task_ = Task::new(0);
+                    task_table.create(task_.clone()).await;
+                }
 
+                // TODO: remove this rendering
                 let resp_msg = XMessage::BulkMessage(format!(
                     "{}\n{}\n",
                     worker_table.render().await,
@@ -64,14 +67,15 @@ pub async fn handle(
                 if let Some(mut task_) = task_ {
                     task_.state = task::State::Ready;
                     task_table.update(&id, task_).await?;
-
-                    let resp_msg = XMessage::BulkMessage(format!(
-                        "{}\n{}\n",
-                        worker_table.render().await,
-                        task_table.render().await,
-                    ));
-                    framed_writer.send(resp_msg).await?;
                 }
+
+                // TODO: remove this rendering
+                let resp_msg = XMessage::BulkMessage(format!(
+                    "{}\n{}\n",
+                    worker_table.render().await,
+                    task_table.render().await,
+                ));
+                framed_writer.send(resp_msg).await?;
             }
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal all pause/created x -> Ready
@@ -102,7 +106,7 @@ pub async fn handle(
                 if let Some(mut task_) = task_ {
                     task_.state = task::State::Terminated(-1);
                     task_table.update(&id, task_).await?;
-                    
+
                     // TODO: also sending a cancelling signal to the runnning task on worker
 
                     let resp_msg = XMessage::BulkMessage(format!(

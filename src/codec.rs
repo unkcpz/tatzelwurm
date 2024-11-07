@@ -13,7 +13,7 @@ use crate::task;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Operation {
     Inspect,
-    AddTask,
+    AddTask(u32),
     PlayTask(Uuid),
     PlayAllTask,
     KillTask(Uuid),
