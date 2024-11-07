@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use tokio::time::{self, sleep};
+use tokio::task::yield_now;
+use tokio::time;
 
 use crate::task::{self, Table as TaskTable};
 use crate::worker::Table as WorkerTable;
@@ -53,9 +54,8 @@ pub async fn assign(worker_table: WorkerTable, task_table: TaskTable) -> anyhow:
                 task.worker = Some(worker_id);
                 let _ = task_table.update(&task_id, task).await;
 
-                // XXX: short sleep so the running information can send back from worker. 
-                // What the time interval should be set here?
-                sleep(Duration::from_millis(10)).await;
+                // relinquish the control for this tight loop
+                yield_now().await;
             }
         }
         .await;
