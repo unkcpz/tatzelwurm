@@ -1,11 +1,11 @@
 use std::{io, marker::PhantomData};
 
+use byteorder::{BigEndian, ByteOrder};
 use bytes::{Buf, BufMut};
 use rmp_serde::{encode, Deserializer};
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
 use uuid::Uuid;
-use byteorder::{BigEndian, ByteOrder};
 
 use crate::task;
 
@@ -77,7 +77,9 @@ pub enum XMessage {
     },
 
     // Print tables
-    PrintTable(),
+    PrintTable {
+        table_type: String,
+    },
 
     // Operation act on worker table
     TaskTableOp {

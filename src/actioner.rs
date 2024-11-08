@@ -33,14 +33,26 @@ pub async fn handle(
     // block process if it runs on non-block worker.
     if let Some(Ok(msg)) = framed_reader.next().await {
         match msg {
-            XMessage::PrintTable() => {
-                let resp_msg = XMessage::BulkMessage(format!(
-                    "{}\n\n{}\n",
-                    worker_table.render().await,
-                    task_table.render().await,
-                ));
-                framed_writer.send(resp_msg).await?;
-            }
+            XMessage::PrintTable { table_type } => match table_type.as_str() {
+                "worker" => {
+                    let resp_msg = XMessage::BulkMessage(format!(
+                        "Worker table:\n{}\n",
+                        worker_table.render().await,
+                    ));
+                    framed_writer.send(resp_msg).await?;
+                }
+                "task" => {
+                    let resp_msg = XMessage::BulkMessage(format!(
+                        "Task table:\n{}\n",
+                        task_table.render().await,
+                    ));
+                    framed_writer.send(resp_msg).await?;
+                }
+                _ => {
+                    let resp_msg = XMessage::BulkMessage("task or worker".to_string());
+                    framed_writer.send(resp_msg).await?;
+                }
+            },
 
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal n/a -> Created

@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use futures::SinkExt;
 use tatzelwurm::codec::Operation;
 use tatzelwurm::codec::{Codec, XMessage};
@@ -7,6 +7,12 @@ use tokio::net::TcpStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use uuid::Uuid;
+
+#[derive(ValueEnum, Clone)]
+enum TableType {
+    Task,
+    Worker,
+}
 
 #[derive(Subcommand)]
 enum TaskCommand {
@@ -36,7 +42,11 @@ enum TaskCommand {
 #[derive(Subcommand)]
 enum TableCommand {
     /// Inspect table(s)
-    Inspect,
+    Inspect {
+        // Table name
+        #[arg(short, long, value_enum)]
+        table_type: TableType,
+    },
 }
 
 #[derive(Subcommand)]
@@ -115,9 +125,22 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.commands {
         Commands::Table { command } => match command {
-            TableCommand::Inspect => {
-                framed_writer.send(XMessage::PrintTable()).await?;
-            }
+            TableCommand::Inspect { table_type } => match table_type {
+                TableType::Task => {
+                    framed_writer
+                        .send(XMessage::PrintTable {
+                            table_type: "task".to_string(),
+                        })
+                        .await?;
+                }
+                TableType::Worker => {
+                    framed_writer
+                        .send(XMessage::PrintTable {
+                            table_type: "worker".to_string(),
+                        })
+                        .await?;
+                }
+            },
         },
         Commands::Task { command } => match command {
             TaskCommand::Add { number } => {
