@@ -154,8 +154,8 @@ where
         // Peek at the length without consuming bytes
         let len = BigEndian::read_u32(&src[..4]) as usize;
 
-        if src.len() < len {
-            src.reserve(len - src.len());
+        if src.len() < 4 + len {
+            src.reserve(4 + len - src.len());
             return Ok(None);
         }
 
