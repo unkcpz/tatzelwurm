@@ -124,7 +124,6 @@ It is a message broker that communicate with workers connected and meanwhile it 
 
 In order to replace RMQ for queuing the tasks and recover the tasks state after reboot the machine, it needs the functionality to persistent the task list on the disk. 
 Different from RMQ which lack of API to introspect task queues to determine the task list and task priorities, the coordinator has the task table with task can be tagged with multiple properties such as priority and it blocking type.
-Using Rust is for the edging performance that can potentially handle millions of processes in the foreseeable future. 
 
 Here are requirements for the coordinator:
 
@@ -136,12 +135,10 @@ Here are requirements for the coordinator:
 
 2. Worker
 
-The worker is responsible for running python functions (or more generic if the I can provide message interface in Rust, I believe it is not hard to build on top the wrapper to different languages, such as Julia and Lua).
+The worker is responsible for running python functions (or more generic if the I can provide message interface by having core part in low-level language. I believe it is then not hard to build on top the wrapper to different languages, such as Julia and Lua).
 In the context of plumpy, it is for running python coroutines by place the coroutines to the event loop that bind to the worker interpretor. 
 There are two ways of implementing the worker, one is having the worker as client and implemented in python, the harder way is implement worker in rust and expose the interface to python using `pyo3`.
 (? May possible to further seperate define the functionalitios of worker. It needs to communicate and running things. The communicate port is de/serializing the data and this port can definitly use the API exposed through `pyo3` here.)
-Having worker implemented in Rust may bring the advantage that for future design to having multi-threading support or having specific threads for CPU-bound blocking functions, the Rust implementation can have the low-lever threads management and has no limitation of GIL.
-However, the worker anyway require a wrapper layer between Rust and Python, which potentially make the debugging more difficult if something goes wrong. 
 For simplicity, the worker should first implemented in Python that can strat an event loop and has `add_task_subscriber` method to push coroutines to the event loop. 
 It will make the replacement in AiiDA straightforward.
 
@@ -160,32 +157,6 @@ There is always a guy look into system from outside and try to make some actions
 In the context of AiiDA, it is us the regular user who is willing to launch, pause, resume, and kill the process.
 I call it actioner. 
 The actioner will send the bundle of operations through a defined message that follow certain protocol to the coordinator. Coordinator then send or broadcast the message to workers and take actions to manipulate the tasks.
-
-#### Advantages of Rust Over Python in asynchronous programming
-
-In the initial goal of language design, Rust was putting [fearless concurrency](https://blog.rust-lang.org/2015/04/10/Fearless-Concurrency.html) in its core, with the help of concepts like ownership and lifetime.
-Over the year, from AiiDA team the developers worked on engine were very suffered from debugging the code with `asyncio`, more or less I believe.
-
-I can image people from the team may against it because they may not at the moment very familiar with Rust and Rust is well-known for its steep learning curve for beginners.
-However, the effort is well worth it: 
-Rust’s design is incredibly robust for complex and performance-intensive applications, especially when it comes to asynchronous programming. 
-Building a package from scratch might seem challenging, but with a clear design, using Rust and its powerful async capabilities, like Tokio, enables us to create highly performant and scalable software that’s more reliable than Python for this specific case.
-By embracing Rust, we’re not only building a solution that performs better, but we’re also investing in a codebase that’s safer and more maintainable in the long run.
-
-Rust bring memory safety without GC.
-Memory issues are a major pain point in high-throughput systems, and Rust offers a unique advantage with its zero-cost abstractions for memory safety. 
-Rust’s borrow checker and ownership model prevent common errors like null pointer dereferencing, dangling pointers, and data races—all of which Python’s garbage collection cannot handle efficiently. 
-Rust eliminates these risks at compile-time, resulting in a more reliable and crash-resistant service.
-
-Rust's Concurrency scales with modern multi-core Systems.
-With Rust, we gain access to high-performance asynchronous programming through frameworks like `Tokio`, which is highly optimized for I/O-bound tasks. 
-Python’s GIL (Global Interpreter Lock) inherently limits true parallel execution in most cases, leading to bottlenecks that severely hinder performance as load increases. 
-Rust’s async capabilities allow for parallelism without these limitations, ideal for network-intensive applications like our communication component.
-
-Rust has great error handling and stability.
-Rust’s strict compile-time checks lead to a higher degree of confidence in error handling and code stability. 
-Rust doesn’t just allow developers to skip error handling, unlike Python where errors can bubble up silently, resulting in unhandled exceptions and potential system crashes. 
-By enforcing rigorous handling of potential failures, and ensures that our component will be robust, resilient, and dependable, even under heavy load.
 
 #### Two tables
 
@@ -484,6 +455,42 @@ When task is killed, it requires to
 1. Change the DB record for the task (by aiida-core).
 1. When all cancelling finished, close the event loop and mark the process as killed in the table.
 
+#### Advantages of Rust Over Python in asynchronous programming
+
+If you read to here, I think we can start a serious conversation.
+
+I can image people from the team may against it because they may not at the moment very familiar with Rust and Rust is well-known for its steep learning curve for beginners.
+However, the effort is well worth it: 
+Rust’s design is incredibly robust for complex and performance-intensive applications, especially when it comes to asynchronous programming. 
+Building a package from scratch might seem challenging, but with a clear design, using Rust and its powerful async capabilities, like Tokio, enables us to create highly performant and scalable software that’s more reliable than Python for this specific case.
+By embracing Rust, we’re not only building a solution that performs better, but we’re also investing in a codebase that’s safer and more maintainable in the long run.
+
+In the initial goal of language design, Rust was putting [fearless concurrency](https://blog.rust-lang.org/2015/04/10/Fearless-Concurrency.html) in its core, with the help of concepts like ownership and lifetime.
+Over the year, from AiiDA team the developers worked on engine were very suffered from debugging the code with `asyncio`, more or less I believe.
+
+Language side, Rust bring memory safety without GC.
+Memory issues are a major pain point in high-throughput systems, and Rust offers a unique advantage with its zero-cost abstractions for memory safety. 
+Rust’s borrow checker and ownership model prevent common errors like null pointer dereferencing, dangling pointers, and data races—all of which Python’s garbage collection cannot handle efficiently. 
+Rust eliminates these risks at compile-time, resulting in a more reliable and crash-resistant service.
+
+Rust's Concurrency scales with modern multi-core Systems.
+With Rust, we gain access to high-performance asynchronous programming through frameworks like `Tokio`, which is highly optimized for I/O-bound tasks. 
+Python’s GIL (Global Interpreter Lock) inherently limits true parallel execution in most cases, leading to bottlenecks that severely hinder performance as load increases. 
+Rust’s async capabilities allow for parallelism without these limitations, ideal for network-intensive applications like our communication component.
+
+Rust has great error handling and stability.
+Rust’s strict compile-time checks lead to a higher degree of confidence in error handling and code stability. 
+Rust doesn’t just allow developers to skip error handling, unlike Python where errors can bubble up silently, resulting in unhandled exceptions and potential system crashes. 
+By enforcing rigorous handling of potential failures, and ensures that our component will be robust, resilient, and dependable, even under heavy load.
+
+To summarize, following strong reasons drive me to make such decision:
+
+- Python has GIL and therefore not able to provide real CPU parallelism.
+- I tried python from start, but I spend more time on figuring out how to frame stream to MassagePack in python even though I am more familiar with python.
+- In my vision, AiiDA sholud go beyond python as only language to orchestrate the workflow, and we already got request about CWL and Julia and maybe more. Using a more low-level language allow to build the wrapper on top and extend the realm. This project can be a very good start.
+- If the project done with python, if not me, there will be other people want to rewrite it in other language. If it writen in Rust, the only possibility within 10 years is rewriting it again in Rust.
+- [I believe I am able to finish this projet, not just start it](https://www.youtube.com/watch?v=Z3xPIYHKSoI)
+
 ### Experiments required before start
 
 These are collection and short summary of awswers from ChatGPT 4o, which give the hints for tools and technique stacks where I should look and clear the path before start.
@@ -503,7 +510,7 @@ Comments:
 
 #### The interface for worker and actioner
 
-(comming soon)
+(more details require discussion)
 
 - worker and actioner are independent of central design, since the interface can be very flexible as messages and therefore make the use of the system programming language agnostic.
 - But it anyway requires real implementation for the actioner and worker.
