@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           binary_names=("tatzelwurm" "workwurm" "actionwurm")
-          dirname="${binary_names[0]}-${{ env.VERSION }}-${{ matrix.target }}"
+          dirname="${binary_names[0]}-nightly-${{ matrix.target }}"
           mkdir "$dirname"
 
           # Move each binary to the directory
@@ -99,7 +99,9 @@ jobs:
           name: ${{ env.RELEASE_NAME }}
           tag_name: "nightly"
           prerelease: true
-          generate_release_notes: true
+          allow_override: true
+          # After 0.1 release, use CHANGELOG.md with a dev section
+          # generate_release_notes: true
           files: |
             ${{ env.ASSET }}
 
