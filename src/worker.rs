@@ -40,8 +40,8 @@ impl Worker {
         let msg = IMessage::TaskLaunch(*id);
         self.tx
             .send(msg)
-            .await
-            .context("fail in sending task to worker")
+            .await?;
+        Ok(())
     }
 
     pub fn incr_load(&mut self) {
