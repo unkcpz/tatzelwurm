@@ -16,7 +16,9 @@ enum TaskState {
     Submit,
     Pause,
     Run,
-    Terminated,
+    Complete,
+    Kill,
+    Except,
 }
 
 #[derive(Subcommand)]
@@ -174,8 +176,11 @@ async fn main() -> anyhow::Result<()> {
                             TaskState::Ready=> task::State::Ready,
                             TaskState::Submit => task::State::Submit,
                             TaskState::Pause => task::State::Pause,
-                            TaskState::Terminated => task::State::Terminated(0), // TODO:
                             TaskState::Run => task::State::Run,
+                            TaskState::Complete => task::State::Terminated(0), 
+                            TaskState::Kill => task::State::Terminated(-1), 
+                            // TODO: not elegant, try better
+                            TaskState::Except => task::State::Terminated(-2), 
                         }
                     }).collect();
                 framed_writer
