@@ -5,6 +5,7 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::codec::Operation;
+use crate::task::State;
 use crate::{
     codec::Codec,
     task,
@@ -34,20 +35,27 @@ pub async fn handle(
     if let Some(Ok(msg)) = framed_reader.next().await {
         match msg {
             XMessage::WorkerTablePrint => {
-                let resp_msg = XMessage::BulkMessage(format!(
-                    "Worker table:\n{}\n",
-                    worker_table.render().await,
-                ));
+                let resp_msg = XMessage::BulkMessage(format!("{}\n", worker_table.render().await,));
                 framed_writer.send(resp_msg).await?;
             }
 
             XMessage::TaskTablePrint { states } => {
-
+                let count_info = task_table.count().await;
+                let count_info = format!("created: {}, ready: {}, submit: {}, pause: {}, run: {}, complete: {}, killed: {}.",
+                    count_info.get(&State::Created).unwrap_or(&0),
+                    count_info.get(&State::Ready).unwrap_or(&0),
+                    count_info.get(&State::Submit).unwrap_or(&0),
+                    count_info.get(&State::Pause).unwrap_or(&0),
+                    count_info.get(&State::Run).unwrap_or(&0),
+                    count_info.get(&State::Terminated(0)).unwrap_or(&0),
+                    count_info.get(&State::Terminated(-1)).unwrap_or(&0),
+                );
                 let tasks = task_table.filter_by_states(states).await;
                 let task_table = task::Table::from_mapping(tasks);
                 let resp_msg = XMessage::BulkMessage(format!(
-                    "Task table:\n{}\n",
+                    "{}\n\n{}\n",
                     task_table.render().await,
+                    count_info,
                 ));
                 framed_writer.send(resp_msg).await?;
             }
@@ -61,12 +69,7 @@ pub async fn handle(
                     task_table.create(task_.clone()).await;
                 }
 
-                // TODO: remove this rendering
-                let resp_msg = XMessage::BulkMessage(format!(
-                    "{}\n{}\n",
-                    worker_table.render().await,
-                    task_table.render().await,
-                ));
+                let resp_msg = XMessage::BulkMessage(format!("Add {n} tasks to run.\n",));
                 framed_writer.send(resp_msg).await?;
             }
             // Signal direction - src: actioner, dst: coordinator
@@ -79,19 +82,16 @@ pub async fn handle(
                     task_table.update(&id, task_).await?;
                 }
 
-                // TODO: remove this rendering
-                let resp_msg = XMessage::BulkMessage(format!(
-                    "{}\n{}\n",
-                    worker_table.render().await,
-                    task_table.render().await,
-                ));
+                let resp_msg = XMessage::BulkMessage(format!("Launching task uuid={id}.\n",));
                 framed_writer.send(resp_msg).await?;
             }
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal all pause/created x -> Ready
             XMessage::ActionerOp(Operation::PlayAllTask) => {
                 // TODO: also include pause state to resume
-                let resumable_tasks = task_table.filter_by_states(vec![task::State::Created]).await;
+                let resumable_tasks = task_table
+                    .filter_by_states(vec![task::State::Created])
+                    .await;
 
                 for (task_id, _) in resumable_tasks {
                     let Some(mut task_) = task_table.read(&task_id).await else {
@@ -119,11 +119,7 @@ pub async fn handle(
 
                     // TODO: also sending a cancelling signal to the runnning task on worker
 
-                    let resp_msg = XMessage::BulkMessage(format!(
-                        "{}\n{}\n",
-                        worker_table.render().await,
-                        task_table.render().await,
-                    ));
+                    let resp_msg = XMessage::BulkMessage(format!("Kill task uuid={id}.\n",));
                     framed_writer.send(resp_msg).await?;
                 }
             }

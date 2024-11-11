@@ -8,13 +8,14 @@ use tabled::settings::Style;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum State {
     Created,
     Ready,
     Submit,
     Pause,
     Run,
+    // XXX: distinguish kill and complete as dedicate states
     Terminated(i8),
 }
 
@@ -149,6 +150,41 @@ impl Table {
             .filter(|(_, t)| states.contains(&t.state))
             .map(|(&x, t)| (x, t.clone()))
             .collect()
+    }
+
+    pub async fn count(&self) -> HashMap<State, u64> {
+        let mut state_count = HashMap::<State, u64>::new();
+        for (_, task) in self.inner.lock().await.iter() {
+            match task.state {
+                State::Created => state_count
+                    .entry(State::Created)
+                    .and_modify(|e| *e += 1)
+                    .or_insert(1),
+                State::Ready => state_count
+                    .entry(State::Ready)
+                    .and_modify(|e| *e += 1)
+                    .or_insert(1),
+                State::Submit => state_count
+                    .entry(State::Submit)
+                    .and_modify(|e| *e += 1)
+                    .or_insert(1),
+                State::Pause => state_count
+                    .entry(State::Pause)
+                    .and_modify(|e| *e += 1)
+                    .or_insert(1),
+                State::Run => state_count
+                    .entry(State::Run)
+                    .and_modify(|e| *e += 1)
+                    .or_insert(1),
+                State::Terminated(x) => state_count
+                    .entry(State::Terminated(x))
+                    .and_modify(|e| *e += 1)
+                    .or_insert(1),
+                _ => todo!(),
+            };
+        }
+
+        state_count
     }
 }
 // lookup look at two table and construct a message send to worker.
