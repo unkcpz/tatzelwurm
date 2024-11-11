@@ -7,14 +7,14 @@ use tokio_util::codec::Framed;
 use crate::codec::Codec;
 use crate::codec::XMessage;
 
-pub enum Client {
-    Worker { id: u32, stream: TcpStream },
-    Actioner { id: u32, stream: TcpStream },
+pub enum Hook {
+    Worker { stream: TcpStream },
+    Actioner { stream: TcpStream },
 }
 
 // Perform handshake, decide client type (worker or actioner) and protocol (always messagepack)
 // XXX: hyperequeue seems doesn't have handshake stage, how??
-pub async fn handshake(stream: TcpStream) -> anyhow::Result<Client> {
+pub async fn handshake(stream: TcpStream) -> anyhow::Result<Hook> {
     let mut frame = Framed::new(stream, Codec::<XMessage>::new());
 
     frame
@@ -27,12 +27,12 @@ pub async fn handshake(stream: TcpStream) -> anyhow::Result<Client> {
                 "worker" => {
                     frame.send(XMessage::HandShake("Go".to_string())).await?;
                     let stream = frame.into_inner();
-                    Client::Worker { id: 0, stream }
+                    Hook::Worker { stream }
                 }
                 "actioner" => {
                     frame.send(XMessage::HandShake("Go".to_string())).await?;
                     let stream = frame.into_inner();
-                    Client::Actioner { id: 0, stream }
+                    Hook::Actioner { stream }
                 }
                 _ => anyhow::bail!("unknown client: {info:#?}"),
             },
