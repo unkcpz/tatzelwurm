@@ -99,7 +99,6 @@ jobs:
           name: ${{ env.RELEASE_NAME }}
           tag_name: "nightly"
           prerelease: true
-          allow_override: true
           # After 0.1 release, use CHANGELOG.md with a dev section
           # generate_release_notes: true
           files: |
