@@ -1,13 +1,14 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use futures::SinkExt;
-use tatzelwurm::codec::Operation;
-use tatzelwurm::codec::{Codec, XMessage};
-use tatzelwurm::task;
-use tokio::net::tcp::{ReadHalf, WriteHalf};
+use uuid::Uuid;
+
 use tokio::net::TcpStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
-use uuid::Uuid;
+
+use tatzelwurm::codec::{Codec, Operation, XMessage};
+use tatzelwurm::interface::{handshake, ClientType};
+use tatzelwurm::task;
 
 #[derive(Clone, ValueEnum)]
 enum TaskState {
@@ -81,49 +82,20 @@ struct Cli {
     commands: Commands,
 }
 
-// TODO: this can be generic as a client method and used together with worker and even as interface
-// for other language client.
-async fn handshake<'a>(rhalf: &mut ReadHalf<'a>, whalf: &mut WriteHalf<'a>) -> anyhow::Result<()> {
-    let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
-    let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
-
-    loop {
-        if let Some(Ok(message)) = framed_reader.next().await {
-            match message {
-                XMessage::HandShake(info) => match info.as_str() {
-                    "Go" => {
-                        println!("handshake successful!");
-                        break;
-                    }
-                    "Who you are?" => {
-                        framed_writer
-                            .send(XMessage::HandShake("actioner".to_string()))
-                            .await?;
-                    }
-                    _ => eprintln!("unknown handshake info: {info}"),
-                },
-                _ => eprintln!("unknown message: {message:#?}"),
-            }
-        }
-    }
-
-    Ok(())
-}
-
 // NOTE: This bin should be as simple as possible, since it will be replaced with python client
 // with using the comm API provided by the wurm.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let mut stream = TcpStream::connect("127.0.0.1:5677").await?;
+    let stream = TcpStream::connect("127.0.0.1:5677").await?;
     println!("Connected to coordinator");
 
-    let (mut rhalf, mut whalf) = stream.split();
+    let Ok(mut stream) = handshake(stream, ClientType::Actioner).await else {
+        anyhow::bail!("handshak failed");
+    };
 
-    if let Err(err) = handshake(&mut rhalf, &mut whalf).await {
-        anyhow::bail!(err);
-    }
+    let (rhalf, whalf) = stream.split();
 
     let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
     let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
@@ -169,25 +141,26 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             TaskCommand::List { filter: states } => {
-                let states = states.iter()
-                        .map(|s| {
+                let states = states
+                    .iter()
+                    .map(|s| {
                         match s {
                             TaskState::Created => task::State::Created,
-                            TaskState::Ready=> task::State::Ready,
+                            TaskState::Ready => task::State::Ready,
                             TaskState::Submit => task::State::Submit,
                             TaskState::Pause => task::State::Pause,
                             TaskState::Run => task::State::Run,
-                            TaskState::Complete => task::State::Terminated(0), 
-                            TaskState::Kill => task::State::Terminated(-1), 
+                            TaskState::Complete => task::State::Terminated(0),
+                            TaskState::Kill => task::State::Terminated(-1),
                             // TODO: not elegant, try better
-                            TaskState::Except => task::State::Terminated(-2), 
+                            TaskState::Except => task::State::Terminated(-2),
                         }
-                    }).collect();
+                    })
+                    .collect();
                 framed_writer
                     .send(XMessage::TaskTablePrint { states })
                     .await?;
             }
-            _ => todo!(),
         },
     }
 

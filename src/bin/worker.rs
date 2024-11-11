@@ -3,6 +3,7 @@ use std::time::Duration;
 use futures::SinkExt;
 use rand::{self, Rng};
 use tatzelwurm::codec::{Codec, XMessage};
+use tatzelwurm::interface::{handshake, ClientType};
 use tatzelwurm::task::State as TaskState;
 use tokio::{
     net::TcpStream,
@@ -10,7 +11,7 @@ use tokio::{
     time::{self, sleep},
 };
 use tokio_stream::StreamExt;
-use tokio_util::codec::{Framed, FramedRead, FramedWrite};
+use tokio_util::codec::{FramedRead, FramedWrite};
 use uuid::Uuid;
 
 /// This is the dummy task that should be the interface for real async task
@@ -34,32 +35,6 @@ async fn run_task_with_ack(id: Uuid) -> oneshot::Receiver<()> {
     ack_rx
 }
 
-async fn handshake(stream: TcpStream) -> anyhow::Result<TcpStream> {
-    let mut framed = Framed::new(stream, Codec::<XMessage>::new());
-
-    loop {
-        if let Some(Ok(message)) = framed.next().await {
-            match message {
-                XMessage::HandShake(info) => match info.as_str() {
-                    "Go" => {
-                        println!("handshake successful!");
-                        break;
-                    }
-                    "Who you are?" => {
-                        framed
-                            .send(XMessage::HandShake("worker".to_string()))
-                            .await?;
-                    }
-                    _ => eprintln!("unknown handshake info: {info}"),
-                },
-                _ => eprintln!("unknown message: {message:#?}"),
-            }
-        }
-    }
-
-    Ok(framed.into_inner())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let stream = TcpStream::connect("127.0.0.1:5677").await?;
@@ -67,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     let socket_addr = stream.local_addr()?;
 
-    let Ok(mut stream) = handshake(stream).await else {
+    let Ok(mut stream) = handshake(stream, ClientType::Worker).await else {
         anyhow::bail!("handshak failed");
     };
 

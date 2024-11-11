@@ -3,7 +3,7 @@ use tokio::net::TcpListener;
 use tatzelwurm::{actioner, task, worker};
 use tatzelwurm::{
     assign::assign,
-    client::{handshake, Client},
+    client::{self, handshake},
 };
 
 #[tokio::main]
@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
                 let task_table_clone = task_table.clone();
 
                 match handshake(stream).await {
-                    Ok(Client::Worker { stream, .. }) => {
+                    Ok(client::Hook::Worker { stream }) => {
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
                                 worker::handle(stream, worker_table_clone, task_table_clone).await;
                         });
                     }
-                    Ok(Client::Actioner { stream, .. }) => {
+                    Ok(client::Hook::Actioner { stream }) => {
                         tokio::spawn(async move {
                             // TODO: process_stream shouldn't return, using tracing to recording logs and
                             // handling errors
