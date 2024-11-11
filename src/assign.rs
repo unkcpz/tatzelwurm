@@ -27,7 +27,7 @@ pub async fn assign(worker_table: WorkerTable, task_table: TaskTable) -> anyhow:
         // But here I use the static table in a single lookup.
 
         async {
-            let ready_tasks = task_table.filter_by_state(task::State::Ready).await;
+            let ready_tasks = task_table.filter_by_states(vec![task::State::Ready]).await;
 
             for (task_id, _) in ready_tasks {
                 let Some(mut task) = task_table.read(&task_id).await else {

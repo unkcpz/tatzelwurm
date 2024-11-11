@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
 use uuid::Uuid;
 
-use crate::task;
+use crate::task::{self, State};
 
 // XXX: deprecate me
 #[derive(Serialize, Deserialize, Debug)]
@@ -76,9 +76,12 @@ pub enum XMessage {
         to: task::State,
     },
 
-    // Print tables
-    PrintTable {
-        table_type: String,
+    // Print worker table
+    WorkerTablePrint,
+
+    // Print task table
+    TaskTablePrint {
+        states: Vec<State>,
     },
 
     // Operation act on worker table

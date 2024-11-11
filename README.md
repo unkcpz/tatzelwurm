@@ -51,17 +51,26 @@ Run
 
 to add task to table and run it.
 
-To check the worker table and task table run
+To check the task list and filtering on specific state of tasks 
 
 ```bash
-./actionwurm table inspect
+./actionwurm task list --filter <state>
 ```
+
+By default, if no argument is passing, only running state tasks are listed.
 
 Start the worker, or multiple workers if want to test load balancing.
 
 ```bash
 ./workwurm
 ```
+
+To check the worker table and task table run
+
+```bash
+./actionwurm worker list
+```
+
 
 If you want to compile from source code, you can: 
 

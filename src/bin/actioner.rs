@@ -2,16 +2,21 @@ use clap::{Parser, Subcommand, ValueEnum};
 use futures::SinkExt;
 use tatzelwurm::codec::Operation;
 use tatzelwurm::codec::{Codec, XMessage};
+use tatzelwurm::task;
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use uuid::Uuid;
 
-#[derive(ValueEnum, Clone)]
-enum TableType {
-    Task,
-    Worker,
+#[derive(Clone, ValueEnum)]
+enum TaskState {
+    Created,
+    Ready,
+    Submit,
+    Pause,
+    Run,
+    Terminated,
 }
 
 #[derive(Subcommand)]
@@ -37,16 +42,19 @@ enum TaskCommand {
         /// Task ID to play
         id: Option<Uuid>,
     },
+
+    /// List tasks
+    List {
+        // Filter task states
+        #[arg(short, long, value_enum)]
+        filter: Vec<TaskState>,
+    },
 }
 
 #[derive(Subcommand)]
-enum TableCommand {
-    /// Inspect table(s)
-    Inspect {
-        // Table name
-        #[arg(short, long, value_enum)]
-        table_type: TableType,
-    },
+enum WorkerCommand {
+    /// list workers
+    List,
 }
 
 #[derive(Subcommand)]
@@ -58,9 +66,9 @@ enum Commands {
     },
 
     // Operations on table(s)
-    Table {
+    Worker {
         #[command(subcommand)]
-        command: TableCommand,
+        command: WorkerCommand,
     },
 }
 
@@ -124,23 +132,10 @@ async fn main() -> anyhow::Result<()> {
     // let msg = Message::add_mission(Mission::new());
 
     match cli.commands {
-        Commands::Table { command } => match command {
-            TableCommand::Inspect { table_type } => match table_type {
-                TableType::Task => {
-                    framed_writer
-                        .send(XMessage::PrintTable {
-                            table_type: "task".to_string(),
-                        })
-                        .await?;
-                }
-                TableType::Worker => {
-                    framed_writer
-                        .send(XMessage::PrintTable {
-                            table_type: "worker".to_string(),
-                        })
-                        .await?;
-                }
-            },
+        Commands::Worker { command } => match command {
+            WorkerCommand::List => {
+                framed_writer.send(XMessage::WorkerTablePrint).await?;
+            }
         },
         Commands::Task { command } => match command {
             TaskCommand::Add { number } => {
@@ -170,6 +165,22 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     println!("provide the task id.");
                 }
+            }
+            TaskCommand::List { filter: states } => {
+                let states = states.iter()
+                        .map(|s| {
+                        match s {
+                            TaskState::Created => task::State::Created,
+                            TaskState::Ready=> task::State::Ready,
+                            TaskState::Submit => task::State::Submit,
+                            TaskState::Pause => task::State::Pause,
+                            TaskState::Terminated => task::State::Terminated(0), // TODO:
+                            TaskState::Run => task::State::Run,
+                        }
+                    }).collect();
+                framed_writer
+                    .send(XMessage::TaskTablePrint { states })
+                    .await?;
             }
             _ => todo!(),
         },
