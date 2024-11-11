@@ -33,26 +33,24 @@ pub async fn handle(
     // block process if it runs on non-block worker.
     if let Some(Ok(msg)) = framed_reader.next().await {
         match msg {
-            XMessage::PrintTable { table_type } => match table_type.as_str() {
-                "worker" => {
-                    let resp_msg = XMessage::BulkMessage(format!(
-                        "Worker table:\n{}\n",
-                        worker_table.render().await,
-                    ));
-                    framed_writer.send(resp_msg).await?;
-                }
-                "task" => {
-                    let resp_msg = XMessage::BulkMessage(format!(
-                        "Task table:\n{}\n",
-                        task_table.render().await,
-                    ));
-                    framed_writer.send(resp_msg).await?;
-                }
-                _ => {
-                    let resp_msg = XMessage::BulkMessage("task or worker".to_string());
-                    framed_writer.send(resp_msg).await?;
-                }
-            },
+            XMessage::WorkerTablePrint => {
+                let resp_msg = XMessage::BulkMessage(format!(
+                    "Worker table:\n{}\n",
+                    worker_table.render().await,
+                ));
+                framed_writer.send(resp_msg).await?;
+            }
+
+            XMessage::TaskTablePrint { states } => {
+
+                let tasks = task_table.filter_by_states(states).await;
+                let task_table = task::Table::from_mapping(tasks);
+                let resp_msg = XMessage::BulkMessage(format!(
+                    "Task table:\n{}\n",
+                    task_table.render().await,
+                ));
+                framed_writer.send(resp_msg).await?;
+            }
 
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal n/a -> Created
@@ -93,7 +91,7 @@ pub async fn handle(
             // Handle signal all pause/created x -> Ready
             XMessage::ActionerOp(Operation::PlayAllTask) => {
                 // TODO: also include pause state to resume
-                let resumable_tasks = task_table.filter_by_state(task::State::Created).await;
+                let resumable_tasks = task_table.filter_by_states(vec![task::State::Created]).await;
 
                 for (task_id, _) in resumable_tasks {
                     let Some(mut task_) = task_table.read(&task_id).await else {

@@ -28,13 +28,13 @@ impl fmt::Display for State {
             State::Run => write!(f, "running"),
             State::Terminated(exit_code) if *exit_code == 0 => {
                 write!(f, "complete")
-            },
+            }
             State::Terminated(exit_code) if *exit_code == -1 => {
                 write!(f, "killed")
-            },
+            }
             State::Terminated(exit_code) => {
                 write!(f, "terminated(exit_code={exit_code})")
-            },
+            }
         }
     }
 }
@@ -69,6 +69,13 @@ impl Table {
     pub fn new() -> Self {
         Table {
             inner: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[allow(clippy::must_use_candidate)]
+    pub fn from_mapping(mapping: HashMap<Uuid, Task>) -> Self {
+        Table {
+            inner: Arc::new(Mutex::new(mapping)),
         }
     }
 
@@ -134,12 +141,12 @@ impl Table {
         table.to_string()
     }
 
-    pub async fn filter_by_state(&self, state: State) -> HashMap<Uuid, Task> {
+    pub async fn filter_by_states(&self, states: Vec<State>) -> HashMap<Uuid, Task> {
         self.inner
             .lock()
             .await
             .iter()
-            .filter(|(_, t)| t.state == state)
+            .filter(|(_, t)| states.contains(&t.state))
             .map(|(&x, t)| (x, t.clone()))
             .collect()
     }
