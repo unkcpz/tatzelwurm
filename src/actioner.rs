@@ -62,14 +62,16 @@ pub async fn handle(
 
             // Signal direction - src: actioner, dst: coordinator
             // Handle signal n/a -> Created
-            XMessage::ActionerOp(Operation::AddTask(n)) => {
+            XMessage::ActionerOp(Operation::AddTask(record_id)) => {
                 // TODO: need to check if the task exist
-                for _ in 0..n {
-                    let task_ = Task::new(0);
-                    task_table.create(task_.clone()).await;
-                }
+                // TODO: priority passed from operation
+                let task_ = Task::new(0, &record_id);
+                let id = task_table.create(task_.clone()).await;
 
-                let resp_msg = XMessage::BulkMessage(format!("Add {n} tasks to run.\n",));
+                // send resp to actioner
+                let resp_msg = XMessage::BulkMessage(format!(
+                    "Add task id={id}, map to task record_id={record_id} to run.\n"
+                ));
                 framed_writer.send(resp_msg).await?;
             }
             // Signal direction - src: actioner, dst: coordinator

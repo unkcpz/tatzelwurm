@@ -1,10 +1,7 @@
 use chrono::Utc;
-/// For dev and test purpose
-/// Could move to example or as independent crates depend on how to support it in future.
-/// The surrealdb crate dependency should only used by actioner/worker bins.
-/// The surrealdb crate should not be used by the main crate.
 use clap::{Parser, Subcommand, ValueEnum};
 use futures::SinkExt;
+use rand::{self, Rng};
 use surrealdb::sql::Datetime;
 use uuid::Uuid;
 
@@ -24,10 +21,18 @@ use surrealdb::RecordId;
 use surrealdb::Surreal;
 use surrealdb::Value;
 
+/// For dev and test purpose
+/// Could move to example or as independent crates depend on how to support it in future.
+/// The surrealdb crate dependency should only used by actioner/worker bins.
+/// The surrealdb crate should not be used by the main crate.
+
 #[derive(Debug, Serialize)]
 struct MockTask {
     expr: String,
+
+    // in milliseconds
     snooze: u64,
+
     is_block: bool,
     create_at: Datetime,
     start_at: Option<Datetime>,
@@ -36,9 +41,26 @@ struct MockTask {
 }
 
 impl MockTask {
-    fn new(expr: &str, snooze: u64, is_block: bool, create_at: Datetime) -> Self {
+    fn new(snooze: u64, is_block: bool, create_at: Datetime) -> Self {
+        let x = {
+            let mut rng = rand::thread_rng();
+            rng.gen_range(1..10)
+        };
+        let y = {
+            let mut rng = rand::thread_rng();
+            rng.gen_range(1..10)
+        };
+
+        let syms = ["+", "-", "*", "/"];
+        let sym = {
+            let mut rng = rand::thread_rng();
+            let i = rng.gen_range(0..=3);
+            syms[i]
+        };
+
+        let expr = format!("{x} {sym} {y}");
         Self {
-            expr: expr.to_string(),
+            expr,
             snooze,
             is_block,
             create_at,
@@ -66,13 +88,30 @@ enum TaskState {
     Except,
 }
 
+#[derive(Clone, ValueEnum)]
+enum TaskScale {
+    Small,
+    Medium,
+    Large,
+}
+
+#[derive(Clone, ValueEnum)]
+enum BlockType {
+    Async,
+    Sync,
+}
+
 #[derive(Subcommand)]
 enum TaskCommand {
     /// Add a new task
     Add {
-        // Number of tasks
-        #[arg(short)]
-        number: u32,
+        // Scale of task, small, medium, large
+        #[arg(short, long, value_enum)]
+        scale: TaskScale,
+
+        // Block type, sync or async
+        #[arg(short, long, value_enum)]
+        block_type: BlockType,
     },
 
     /// Play a specific task or all tasks
@@ -129,6 +168,7 @@ struct Cli {
 // NOTE: This bin should be as simple as possible, since it will be replaced with python client
 // with using the comm API provided by the wurm.
 #[tokio::main]
+#[allow(clippy::too_many_lines)] // FIXME:
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -167,8 +207,30 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Commands::Task { command } => match command {
-            TaskCommand::Add { number } => {
-                let task = MockTask::new("2 + 3", 1, false, Utc::now().into());
+            TaskCommand::Add {
+                scale,
+                block_type,
+            } => {
+                let isblock = match block_type {
+                    BlockType::Sync => true,
+                    BlockType::Async => false,
+                };
+
+                // small scale for 100 ~ 1000 millis
+                // medium for 1000 ~ 10_000 millis
+                // large for 10_000 ~ 100_000
+                let x = {
+                    let mut rng = rand::thread_rng();
+                    rng.gen_range(1..10)
+                };
+
+                let st = match scale {
+                    TaskScale::Small => x * 100,
+                    TaskScale::Medium => x * 1000,
+                    TaskScale::Large => x * 10_000,
+                };
+
+                let task = MockTask::new(st, isblock, Utc::now().into());
 
                 let created: Option<Record> = db.create("task").content(task).await?;
 
@@ -176,12 +238,11 @@ async fn main() -> anyhow::Result<()> {
                     let record_id = created.id.to_string();
 
                     framed_writer
-                        .send(XMessage::ActionerOp(Operation::AddTask(number)))
+                        .send(XMessage::ActionerOp(Operation::AddTask(record_id)))
                         .await?;
                 } else {
                     eprintln!("not able to create task to pool.");
                 }
-
             }
             TaskCommand::Play { all: true, .. } => {
                 framed_writer
