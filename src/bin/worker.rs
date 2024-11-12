@@ -37,10 +37,10 @@ async fn perform_task() {
     println!("Task that sleep {x}s complete!");
 }
 
-async fn run_task_with_ack(id: Uuid) -> oneshot::Receiver<()> {
+async fn run_task_with_ack(record_id: String) -> oneshot::Receiver<()> {
     let (ack_tx, ack_rx) = oneshot::channel();
 
-    println!("Mock the constructing of task {id} from persistence.");
+    println!("Mock the constructing of task {record_id} from persistence.");
     perform_task().await;
     let _ = ack_tx.send(());
 
@@ -84,17 +84,17 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             Some(Ok(message)) = framed_reader.next() => {
                 match message {
-                    XMessage::TaskLaunch(id) => {
+                    XMessage::TaskLaunch { task_id, record_id } => {
                         // dummy message to be printed in coordinator side
                         framed_writer
                             .send(XMessage::BulkMessage(format!(
-                                "I got the task {id}, Sir! Working on it!"
+                                "Processing on {task_id}."
                             )))
                             .await?;
 
                         let tx_clone = tx.clone();
                         tokio::spawn(async move {
-                            let _ = run_task(id, tx_clone).await;
+                            let _ = run_task(task_id, record_id, tx_clone).await;
                         });
                     }
                     XMessage::HeartBeat(port) => {
@@ -118,10 +118,12 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn run_task<'a>(id: Uuid, tx: mpsc::Sender<XMessage>) -> anyhow::Result<()> {
+// task_id for communication back to communicator
+// record_id for se/de the record from task pool
+async fn run_task<'a>(task_id: Uuid, record_id: String, tx: mpsc::Sender<XMessage>) -> anyhow::Result<()> {
     // Send to tell start processing on the task
     let msg = XMessage::TaskStateChange {
-        id,
+        id: task_id,
         from: TaskState::Submit,
         to: TaskState::Run,
     };
@@ -131,19 +133,19 @@ async fn run_task<'a>(id: Uuid, tx: mpsc::Sender<XMessage>) -> anyhow::Result<()
     // 0. Run the task and get the ack_rx
     // 1. send a message and ask to add the item into the task table.
     // 2. send a message to ask for table look up.
-    let ack_rx = run_task_with_ack(id).await;
+    let ack_rx = run_task_with_ack(record_id).await;
 
     // rx ack resolved means the task is complete
     if let Ok(()) = ack_rx.await {
         let msg = XMessage::TaskStateChange {
-            id,
+            id: task_id,
             from: TaskState::Run,
             to: TaskState::Terminated(0),
         };
         tx.send(msg).await?;
     } else {
         let msg = XMessage::TaskStateChange {
-            id,
+            id: task_id,
             from: TaskState::Run,
             to: TaskState::Terminated(1), // TODO: exit_code from ack_rx
         };

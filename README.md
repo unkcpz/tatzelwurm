@@ -108,11 +108,12 @@ Prototype:
 - [x] in memory tasks table.
 - [x] pretty print table and passing it to actioner.
 - [x] mock use dummy async sleep tasks.
-- [ ] mock the task pool where the task are constructed to perform.
+- [x] mock the task pool where the task are constructed to perform. (#13)
 - [x] worker manage tasks through channels (_kill).
-- [ ] task pool mixed of sync/async tasks, benchmark throughput.
+- [x] task pool mixed of sync/async tasks. (#13) 
 - [x] create -> ready state by the `play` signal.
 - [x] sound CLI for register and play a single task.
+- [ ] benchmark throughput.
 
 Before I move to next intense development and huge refactoring, the items above server as a scaffold for playing with different detail design and hold for design feedbacks from the team.
 I should polish and clear about design note and make an AEP for it first.

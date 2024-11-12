@@ -48,7 +48,10 @@ pub enum XMessage {
     BulkMessage(String),
 
     // The Uuid is the task uuid
-    TaskLaunch(Uuid),
+    TaskLaunch {
+        task_id: Uuid,
+        record_id: String,
+    },
 
     // hand shake message when the msg content is a string
     HandShake(String),
@@ -107,7 +110,10 @@ pub enum IMessage {
 
     // The Uuid is the task uuid
     // dispatcher using worker's tx handler -> worker's rx, after table lookup
-    TaskLaunch(Uuid),
+    TaskLaunch {
+        task_id: Uuid,
+        record_id: String,
+    },
 
     // Operation act on worker table
     WorkerTableOp {

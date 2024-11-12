@@ -16,8 +16,8 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::codec::Codec;
 use crate::codec::{IMessage, XMessage};
-use crate::task;
 use crate::task::Table as TaskTable;
+use crate::task::{self, Task};
 
 #[derive(Debug, Clone)]
 pub struct Worker {
@@ -35,11 +35,13 @@ impl Worker {
         Self { tx, load: 0 }
     }
 
-    pub async fn launch_task(&self, id: &Uuid) -> anyhow::Result<()> {
-        let msg = IMessage::TaskLaunch(*id);
-        self.tx
-            .send(msg)
-            .await?;
+    pub async fn launch_task(&self, task_id: &Uuid, task: &Task) -> anyhow::Result<()> {
+        // XXX: bad smell, nede to abstract task
+        let msg = IMessage::TaskLaunch {
+            task_id: task_id.to_owned(),
+            record_id: task.clone().id,
+        };
+        self.tx.send(msg).await?;
         Ok(())
     }
 
@@ -166,8 +168,8 @@ pub async fn handle(
             // fast-forward to the real worker client
             // then update the worker booking
             Some(imsg) = rx.recv() => {
-                if let IMessage::TaskLaunch(id) = imsg {
-                    let xmsg = XMessage::TaskLaunch(id);
+                if let IMessage::TaskLaunch { task_id, record_id } = imsg {
+                    let xmsg = XMessage::TaskLaunch { task_id, record_id };
                     framed_writer.send(xmsg).await?;
                 } else {
                     anyhow::bail!("unknown msg {imsg:?} from assigner.");
@@ -194,7 +196,7 @@ async fn handle_worker_xmessage<'a>(
             println!("worker {port} alive!");
         }
 
-        // Signal direction - src: worker, dst: coordinator 
+        // Signal direction - src: worker, dst: coordinator
         // Handle signal submit -> run
         XMessage::TaskStateChange {
             id,
@@ -213,7 +215,7 @@ async fn handle_worker_xmessage<'a>(
             }
         }
 
-        // Signal direction - src: worker, dst: coordinator 
+        // Signal direction - src: worker, dst: coordinator
         // Handle signal run -> complete
         XMessage::TaskStateChange {
             id,
@@ -232,7 +234,7 @@ async fn handle_worker_xmessage<'a>(
             }
         }
 
-        // Signal direction - src: worker, dst: coordinator 
+        // Signal direction - src: worker, dst: coordinator
         // Handle signal run -> except
         XMessage::TaskStateChange {
             id,

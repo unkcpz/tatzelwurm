@@ -13,13 +13,11 @@ use tatzelwurm::codec::{Codec, Operation, XMessage};
 use tatzelwurm::interface::{handshake, ClientType};
 use tatzelwurm::task;
 
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use surrealdb::engine::remote::ws::Ws;
 use surrealdb::opt::auth::Root;
-use surrealdb::opt::Resource;
 use surrealdb::RecordId;
 use surrealdb::Surreal;
-use surrealdb::Value;
 
 /// For dev and test purpose
 /// Could move to example or as independent crates depend on how to support it in future.
@@ -207,10 +205,7 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Commands::Task { command } => match command {
-            TaskCommand::Add {
-                scale,
-                block_type,
-            } => {
+            TaskCommand::Add { scale, block_type } => {
                 let isblock = match block_type {
                     BlockType::Sync => true,
                     BlockType::Async => false,

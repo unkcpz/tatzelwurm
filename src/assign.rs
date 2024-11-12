@@ -44,7 +44,7 @@ pub async fn assign(worker_table: WorkerTable, task_table: TaskTable) -> anyhow:
                     continue;
                 };
 
-                if let Err(e) = worker.launch_task(&task_id).await {
+                if let Err(e) = worker.launch_task(&task_id, &task).await {
                     eprintln!("Failed to send message: {e}");
                     continue;
                 }
