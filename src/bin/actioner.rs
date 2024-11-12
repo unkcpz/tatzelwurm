@@ -1,5 +1,11 @@
+use chrono::Utc;
+/// For dev and test purpose
+/// Could move to example or as independent crates depend on how to support it in future.
+/// The surrealdb crate dependency should only used by actioner/worker bins.
+/// The surrealdb crate should not be used by the main crate.
 use clap::{Parser, Subcommand, ValueEnum};
 use futures::SinkExt;
+use surrealdb::sql::Datetime;
 use uuid::Uuid;
 
 use tokio::net::TcpStream;
@@ -9,6 +15,44 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 use tatzelwurm::codec::{Codec, Operation, XMessage};
 use tatzelwurm::interface::{handshake, ClientType};
 use tatzelwurm::task;
+
+use serde::{Deserialize, Serialize, Serializer};
+use surrealdb::engine::remote::ws::Ws;
+use surrealdb::opt::auth::Root;
+use surrealdb::opt::Resource;
+use surrealdb::RecordId;
+use surrealdb::Surreal;
+use surrealdb::Value;
+
+#[derive(Debug, Serialize)]
+struct MockTask {
+    expr: String,
+    snooze: u64,
+    is_block: bool,
+    create_at: Datetime,
+    start_at: Option<Datetime>,
+    end_at: Option<Datetime>,
+    res: Option<String>,
+}
+
+impl MockTask {
+    fn new(expr: &str, snooze: u64, is_block: bool, create_at: Datetime) -> Self {
+        Self {
+            expr: expr.to_string(),
+            snooze,
+            is_block,
+            create_at,
+            start_at: None,
+            end_at: None,
+            res: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct Record {
+    id: RecordId,
+}
 
 #[derive(Clone, ValueEnum)]
 enum TaskState {
@@ -100,6 +144,17 @@ async fn main() -> anyhow::Result<()> {
     let mut framed_reader = FramedRead::new(rhalf, Codec::<XMessage>::new());
     let mut framed_writer = FramedWrite::new(whalf, Codec::<XMessage>::new());
 
+    // Task Pool using surrealdb
+    let db = Surreal::new::<Ws>("127.0.0.1:8000").await?;
+
+    db.signin(Root {
+        username: "root",
+        password: "root",
+    })
+    .await?;
+
+    db.use_ns("test").use_db("test").await?;
+
     // define the mission and then adding a mission to the table (and set the state to ready)
     // This will define the mission and put the mission to some where accessable by the runner
     // (in aiida it then will be a DB.)
@@ -113,9 +168,20 @@ async fn main() -> anyhow::Result<()> {
         },
         Commands::Task { command } => match command {
             TaskCommand::Add { number } => {
-                framed_writer
-                    .send(XMessage::ActionerOp(Operation::AddTask(number)))
-                    .await?;
+                let task = MockTask::new("2 + 3", 1, false, Utc::now().into());
+
+                let created: Option<Record> = db.create("task").content(task).await?;
+
+                if let Some(created) = created {
+                    let record_id = created.id.to_string();
+
+                    framed_writer
+                        .send(XMessage::ActionerOp(Operation::AddTask(number)))
+                        .await?;
+                } else {
+                    eprintln!("not able to create task to pool.");
+                }
+
             }
             TaskCommand::Play { all: true, .. } => {
                 framed_writer

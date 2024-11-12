@@ -1,3 +1,7 @@
+/// For dev and test purpose
+/// Could move to example or as independent crates depend on how to support it in future.
+/// The surrealdb crate dependency should only used by actioner/worker bins.
+/// The surrealdb crate should not be used by the main crate.
 use std::time::Duration;
 
 use futures::SinkExt;
@@ -13,6 +17,14 @@ use tokio::{
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use uuid::Uuid;
+
+use serde::{Deserialize, Serialize};
+use surrealdb::engine::remote::ws::Ws;
+use surrealdb::opt::auth::Root;
+use surrealdb::opt::Resource;
+use surrealdb::RecordId;
+use surrealdb::Surreal;
+use surrealdb::Value;
 
 /// This is the dummy task that should be the interface for real async task
 /// which can be constructed from persistence.
@@ -56,6 +68,17 @@ async fn main() -> anyhow::Result<()> {
 
     let max_slots = 2000;
     let (tx, mut rx) = mpsc::channel(max_slots);
+
+    // DB part for prototype
+    let db = Surreal::new::<Ws>("127.0.0.1:8000").await?;
+
+    db.signin(Root {
+        username: "root",
+        password: "root",
+    })
+    .await?;
+
+    db.use_ns("test").use_db("test").await?;
 
     loop {
         tokio::select! {
