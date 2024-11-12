@@ -113,7 +113,6 @@ Prototype:
 - [x] task pool mixed of sync/async tasks. (#13) 
 - [x] create -> ready state by the `play` signal.
 - [x] sound CLI for register and play a single task.
-- [ ] benchmark throughput.
 
 Before I move to next intense development and huge refactoring, the items above server as a scaffold for playing with different detail design and hold for design feedbacks from the team.
 I should polish and clear about design note and make an AEP for it first.
@@ -122,6 +121,7 @@ At the current stage, the code base is small and every part is clear defined wit
 
 ---------------------
 
+- [ ] benchmark throughput, not too much to bench, the bottleneck is in DB access.
 - [ ] pyo3 interface to expose the communicate part for python runner.
 - [ ] Adding unit tests for things above so stady to move forward.
 - [ ] table management using actor model instead of using mutex.

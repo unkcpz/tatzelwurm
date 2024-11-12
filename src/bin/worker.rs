@@ -27,6 +27,22 @@ use surrealdb::RecordId;
 use surrealdb::Surreal;
 use surrealdb::Value;
 
+use surrealdb::sql::Datetime;
+
+#[derive(Debug, Serialize)]
+struct MockTask {
+    expr: String,
+
+    // in milliseconds
+    snooze: u64,
+
+    is_block: bool,
+    create_at: Datetime,
+    start_at: Option<Datetime>,
+    end_at: Option<Datetime>,
+    res: Option<String>,
+}
+
 /// This is the dummy task that should be the interface for real async task
 /// which can be constructed from persistence.
 async fn perform_async_task() {
