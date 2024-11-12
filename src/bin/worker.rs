@@ -1,3 +1,4 @@
+use std::thread;
 use std::time::Duration;
 
 use futures::SinkExt;
@@ -8,7 +9,7 @@ use tatzelwurm::task::State as TaskState;
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot},
-    time::{self, sleep},
+    time,
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
@@ -16,20 +17,41 @@ use uuid::Uuid;
 
 /// This is the dummy task that should be the interface for real async task
 /// which can be constructed from persistence.
-async fn perform_task() {
+async fn perform_async_task() {
     let x = {
         let mut rng = rand::thread_rng();
         rng.gen_range(1..10)
     };
-    sleep(Duration::from_secs(x)).await;
+    tokio::time::sleep(Duration::from_secs(x)).await;
+    println!("Task that sleep {x}s complete!");
+}
+
+// Dummy task that is sync blocked
+fn perform_sync_task() {
+    let x = {
+        let mut rng = rand::thread_rng();
+        rng.gen_range(1..10)
+    };
+    thread::sleep(Duration::from_secs(x));
     println!("Task that sleep {x}s complete!");
 }
 
 async fn run_task_with_ack(id: Uuid) -> oneshot::Receiver<()> {
     let (ack_tx, ack_rx) = oneshot::channel();
 
-    println!("Mock the constructing of task {id} from persistence.");
-    perform_task().await;
+    // XXX: this should be the info from parse and construct from id
+    let block = false;
+
+    if block {
+        tokio::task::spawn_blocking(move || {
+            println!("Mock the constructing of sync task {id} from persistence.");
+            perform_sync_task();
+        });
+    } else {
+        println!("Mock the constructing of async task {id} from persistence.");
+        perform_async_task().await;
+    }
+
     let _ = ack_tx.send(());
 
     ack_rx
