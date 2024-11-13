@@ -60,22 +60,32 @@ async fn run_task_with_ack(record_id: String) -> oneshot::Receiver<()> {
 
     if let Some(mut mocktask) = mocktask {
         let block = mocktask.is_block;
-
         let x = mocktask.snooze;
-        let start_at = Utc::now();
-        let res = eval(&mocktask.expr);
+        let expr = mocktask.clone().expr;
 
-        if block {
-            tokio::task::spawn_blocking(move || {
+        let (res, start_at, end_at) = if block {
+            let (res, start_at, end_at) = tokio::task::spawn_blocking(move || {
+                let start_at = Utc::now();
+                let res = eval(&expr);
                 thread::sleep(Duration::from_millis(x));
-            });
+                let end_at = Utc::now();
+
+                (res, start_at, end_at)
+            })
+            .await
+            .unwrap();
             tokio::task::yield_now().await;
+            (res, start_at, end_at)
         } else {
+            let start_at = Utc::now();
+            let res = eval(&mocktask.expr);
             tokio::time::sleep(Duration::from_millis(x)).await;
             tokio::task::yield_now().await;
+            let end_at = Utc::now();
+
+            (res, start_at, end_at)
         };
 
-        let end_at = Utc::now();
         mocktask.start_at = Some(start_at.into());
         mocktask.end_at = Some(end_at.into());
         match res {
