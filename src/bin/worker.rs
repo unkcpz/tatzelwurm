@@ -1,12 +1,9 @@
-/// For dev and test purpose
-/// Could move to example or as independent crates depend on how to support it in future.
-/// The surrealdb crate dependency should only used by actioner/worker bins.
-/// The surrealdb crate should not be used by the main crate.
+use chrono::Utc;
+use evalexpr::eval;
 use std::thread;
 use std::time::Duration;
 
 use futures::SinkExt;
-use rand::{self, Rng};
 use tatzelwurm::codec::{Codec, XMessage};
 use tatzelwurm::interface::{handshake, ClientType};
 use tatzelwurm::task::State as TaskState;
@@ -22,14 +19,21 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use surrealdb::engine::remote::ws::Ws;
 use surrealdb::opt::auth::Root;
-use surrealdb::opt::Resource;
-use surrealdb::RecordId;
 use surrealdb::Surreal;
-use surrealdb::Value;
 
+use std::sync::LazyLock;
+use surrealdb::engine::remote::ws::Client;
 use surrealdb::sql::Datetime;
 
-#[derive(Debug, Serialize)]
+/// For dev and test purpose
+/// Could move to example or as independent crates depend on how to support it in future.
+/// The surrealdb crate dependency should only used by actioner/worker bins.
+/// The surrealdb crate should not be used by the main crate.
+
+// static singleton for DB access per worker.
+static DB: LazyLock<Surreal<Client>> = LazyLock::new(Surreal::init);
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct MockTask {
     expr: String,
 
@@ -43,44 +47,54 @@ struct MockTask {
     res: Option<String>,
 }
 
-/// This is the dummy task that should be the interface for real async task
-/// which can be constructed from persistence.
-async fn perform_async_task() {
-    let x = {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(1..10)
-    };
-    tokio::time::sleep(Duration::from_secs(x)).await;
-    println!("Task that sleep {x}s complete!");
-}
-
-// Dummy task that is sync blocked
-fn perform_sync_task() {
-    let x = {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(1..10)
-    };
-    thread::sleep(Duration::from_secs(x));
-    println!("Task that sleep {x}s complete!");
-}
-
 async fn run_task_with_ack(record_id: String) -> oneshot::Receiver<()> {
     let (ack_tx, ack_rx) = oneshot::channel();
 
-    // XXX: this should be the info from parse and construct from id
-    let block = false;
+    let resource = record_id.split_once(':');
 
-    if block {
-        tokio::task::spawn_blocking(move || {
-            println!("Mock the constructing of sync task {record_id} from persistence.");
-            perform_sync_task();
-        });
+    let mocktask: Option<MockTask> = if let Some(resource) = resource {
+        DB.select(resource).await.unwrap()
     } else {
-        println!("Mock the constructing of async task {record_id} from persistence.");
-        perform_async_task().await;
+        None
+    };
+
+    if let Some(mut mocktask) = mocktask {
+        let block = mocktask.is_block;
+
+        let x = mocktask.snooze;
+        let start_at = Utc::now();
+        let res = eval(&mocktask.expr);
+
+        if block {
+            tokio::task::spawn_blocking(move || {
+                thread::sleep(Duration::from_millis(x));
+            });
+            tokio::task::yield_now().await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(x)).await;
+            tokio::task::yield_now().await;
+        };
+
+        let end_at = Utc::now();
+        mocktask.start_at = Some(start_at.into());
+        mocktask.end_at = Some(end_at.into());
+        match res {
+            Ok(value) => {
+                mocktask.res = Some(value.to_string());
+            }
+            Err(err) => {
+                mocktask.res = Some(err.to_string());
+            }
+        }
+
+        if let Some(resource) = resource {
+            let _: Option<MockTask> = DB.update(resource).content(mocktask).await.unwrap();
+        }
+        let _ = ack_tx.send(());
+    } else {
+        // ack not found except
+        todo!()
     }
-  
-    let _ = ack_tx.send(());
 
     ack_rx
 }
@@ -108,15 +122,15 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel(max_slots);
 
     // DB part for prototype
-    let db = Surreal::new::<Ws>("127.0.0.1:8000").await?;
-
-    db.signin(Root {
+    DB.connect::<Ws>("localhost:8000").await?;
+    // Sign in to the server
+    DB.signin(Root {
         username: "root",
         password: "root",
     })
     .await?;
 
-    db.use_ns("test").use_db("test").await?;
+    DB.use_ns("test").use_db("test").await?;
 
     loop {
         tokio::select! {
@@ -158,7 +172,11 @@ async fn main() -> anyhow::Result<()> {
 
 // task_id for communication back to communicator
 // record_id for se/de the record from task pool
-async fn run_task<'a>(task_id: Uuid, record_id: String, tx: mpsc::Sender<XMessage>) -> anyhow::Result<()> {
+async fn run_task<'a>(
+    task_id: Uuid,
+    record_id: String,
+    tx: mpsc::Sender<XMessage>,
+) -> anyhow::Result<()> {
     // Send to tell start processing on the task
     let msg = XMessage::TaskStateChange {
         id: task_id,
