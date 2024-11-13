@@ -47,6 +47,32 @@ struct MockTask {
     res: Option<String>,
 }
 
+async fn perform_async(snooze: u64, expr: &str) -> (String, Datetime, Datetime) {
+    let start_at = Utc::now();
+    let res = eval(expr);
+    tokio::time::sleep(Duration::from_millis(snooze)).await;
+    let end_at = Utc::now();
+
+    let res = match res {
+        Ok(value) => value.to_string(),
+        Err(err) => err.to_string(),
+    };
+    (res, start_at.into(), end_at.into())
+}
+
+fn perform_sync(snooze: u64, expr: &str) -> (String, Datetime, Datetime) {
+    let start_at = Utc::now();
+    let res = eval(expr);
+    thread::sleep(Duration::from_millis(snooze));
+    let end_at = Utc::now();
+
+    let res = match res {
+        Ok(value) => value.to_string(),
+        Err(err) => err.to_string(),
+    };
+    (res, start_at.into(), end_at.into())
+}
+
 async fn run_task_with_ack(record_id: String) -> oneshot::Receiver<()> {
     let (ack_tx, ack_rx) = oneshot::channel();
 
@@ -64,38 +90,19 @@ async fn run_task_with_ack(record_id: String) -> oneshot::Receiver<()> {
         let expr = mocktask.clone().expr;
 
         let (res, start_at, end_at) = if block {
-            let (res, start_at, end_at) = tokio::task::spawn_blocking(move || {
-                let start_at = Utc::now();
-                let res = eval(&expr);
-                thread::sleep(Duration::from_millis(x));
-                let end_at = Utc::now();
-
-                (res, start_at, end_at)
-            })
-            .await
-            .unwrap();
+            let (res, start_at, end_at) =
+                tokio::task::spawn_blocking(move || perform_sync(x, &expr))
+                    .await
+                    .unwrap();
             tokio::task::yield_now().await;
             (res, start_at, end_at)
         } else {
-            let start_at = Utc::now();
-            let res = eval(&mocktask.expr);
-            tokio::time::sleep(Duration::from_millis(x)).await;
-            tokio::task::yield_now().await;
-            let end_at = Utc::now();
-
-            (res, start_at, end_at)
+            perform_async(x, &expr).await
         };
 
-        mocktask.start_at = Some(start_at.into());
-        mocktask.end_at = Some(end_at.into());
-        match res {
-            Ok(value) => {
-                mocktask.res = Some(value.to_string());
-            }
-            Err(err) => {
-                mocktask.res = Some(err.to_string());
-            }
-        }
+        mocktask.start_at = Some(start_at);
+        mocktask.end_at = Some(end_at);
+        mocktask.res = Some(res);
 
         if let Some(resource) = resource {
             let _: Option<MockTask> = DB.update(resource).content(mocktask).await.unwrap();
