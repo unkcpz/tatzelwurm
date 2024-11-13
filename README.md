@@ -41,15 +41,23 @@ Decompress the file and in different terminals or multiplexers, run
 
 to start the coordinator.
 
-Run
+The task pool is mocked by using SurrealDB. 
+Therefore you need to [install the SurrealDB](https://surrealdb.com/docs/surrealdb/installation) and start a DB instance.
+
+For testing purpose, I recommend to use in memory DB by running:
 
 ```bash
-./actionwurm task add
+surreal start --user root --pass root memory
+```
+
+Add task to table and run it.
+The tasks can have different scale that run with different range of snooze time, and have different block type that required to be launched in async time or in threads.
+
+```bash
+./actionwurm task add -h
 ./actionwurm task play <id>
 ./actionwurm task play -a
 ```
-
-to add task to table and run it.
 
 To check the task list and filtering on specific state of tasks 
 
@@ -108,9 +116,9 @@ Prototype:
 - [x] in memory tasks table.
 - [x] pretty print table and passing it to actioner.
 - [x] mock use dummy async sleep tasks.
-- [ ] mock the task pool where the task are constructed to perform.
+- [x] mock the task pool where the task are constructed to perform. (#13)
 - [x] worker manage tasks through channels (_kill).
-- [ ] task pool mixed of sync/async tasks, benchmark throughput.
+- [x] task pool mixed of sync/async tasks. (#13) 
 - [x] create -> ready state by the `play` signal.
 - [x] sound CLI for register and play a single task.
 
@@ -119,8 +127,12 @@ I should polish and clear about design note and make an AEP for it first.
 
 At the current stage, the code base is small and every part is clear defined without too much abstractions.
 
+Since the task pool is added by using mocked surrealdb, which requires huge amount of crates dependencies.
+The worker and actioner binaries should be moved to crates that has independent `Cargo.toml`, to make the compile of server crate fast.
+
 ---------------------
 
+- [ ] benchmark throughput, not too much to bench, the bottleneck is in DB access.
 - [ ] pyo3 interface to expose the communicate part for python runner.
 - [ ] Adding unit tests for things above so stady to move forward.
 - [ ] table management using actor model instead of using mutex.

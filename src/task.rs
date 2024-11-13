@@ -42,15 +42,26 @@ impl fmt::Display for State {
 
 #[derive(Debug, Clone)]
 pub struct Task {
+    // pub task_pool: Uuid, // XXX: ??
+
+    // The id in task pool to se/de the task to/from
+    pub id: String,
+
+    // state of task in coordinator table
     pub state: State,
+
+    // task priority
     pub priority: u32,
+
+    // worker that runs this task
     pub worker: Option<Uuid>,
 }
 
 impl Task {
     #[must_use]
-    pub fn new(priority: u32) -> Self {
+    pub fn new(priority: u32, id: &str) -> Self {
         Self {
+            id: id.to_string(),
             state: State::Created,
             priority,
             worker: None,

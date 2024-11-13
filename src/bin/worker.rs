@@ -1,8 +1,9 @@
+use chrono::Utc;
+use evalexpr::eval;
 use std::thread;
 use std::time::Duration;
 
 use futures::SinkExt;
-use rand::{self, Rng};
 use tatzelwurm::codec::{Codec, XMessage};
 use tatzelwurm::interface::{handshake, ClientType};
 use tatzelwurm::task::State as TaskState;
@@ -15,44 +16,102 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, FramedWrite};
 use uuid::Uuid;
 
-/// This is the dummy task that should be the interface for real async task
-/// which can be constructed from persistence.
-async fn perform_async_task() {
-    let x = {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(1..10)
-    };
-    tokio::time::sleep(Duration::from_secs(x)).await;
-    println!("Task that sleep {x}s complete!");
+use serde::{Deserialize, Serialize};
+use surrealdb::engine::remote::ws::Ws;
+use surrealdb::opt::auth::Root;
+use surrealdb::Surreal;
+
+use std::sync::LazyLock;
+use surrealdb::engine::remote::ws::Client;
+use surrealdb::sql::Datetime;
+
+/// For dev and test purpose
+/// Could move to example or as independent crates depend on how to support it in future.
+/// The surrealdb crate dependency should only used by actioner/worker bins.
+/// The surrealdb crate should not be used by the main crate.
+
+// static singleton for DB access per worker.
+static DB: LazyLock<Surreal<Client>> = LazyLock::new(Surreal::init);
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct MockTask {
+    expr: String,
+
+    // in milliseconds
+    snooze: u64,
+
+    is_block: bool,
+    create_at: Datetime,
+    start_at: Option<Datetime>,
+    end_at: Option<Datetime>,
+    res: Option<String>,
 }
 
-// Dummy task that is sync blocked
-fn perform_sync_task() {
-    let x = {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(1..10)
+async fn perform_async(snooze: u64, expr: &str) -> (String, Datetime, Datetime) {
+    let start_at = Utc::now();
+    let res = eval(expr);
+    tokio::time::sleep(Duration::from_millis(snooze)).await;
+    let end_at = Utc::now();
+
+    let res = match res {
+        Ok(value) => value.to_string(),
+        Err(err) => err.to_string(),
     };
-    thread::sleep(Duration::from_secs(x));
-    println!("Task that sleep {x}s complete!");
+    (res, start_at.into(), end_at.into())
 }
 
-async fn run_task_with_ack(id: Uuid) -> oneshot::Receiver<()> {
+fn perform_sync(snooze: u64, expr: &str) -> (String, Datetime, Datetime) {
+    let start_at = Utc::now();
+    let res = eval(expr);
+    thread::sleep(Duration::from_millis(snooze));
+    let end_at = Utc::now();
+
+    let res = match res {
+        Ok(value) => value.to_string(),
+        Err(err) => err.to_string(),
+    };
+    (res, start_at.into(), end_at.into())
+}
+
+async fn run_task_with_ack(record_id: String) -> oneshot::Receiver<()> {
     let (ack_tx, ack_rx) = oneshot::channel();
 
-    // XXX: this should be the info from parse and construct from id
-    let block = false;
+    let resource = record_id.split_once(':');
 
-    if block {
-        tokio::task::spawn_blocking(move || {
-            println!("Mock the constructing of sync task {id} from persistence.");
-            perform_sync_task();
-        });
+    let mocktask: Option<MockTask> = if let Some(resource) = resource {
+        DB.select(resource).await.unwrap()
     } else {
-        println!("Mock the constructing of async task {id} from persistence.");
-        perform_async_task().await;
-    }
+        None
+    };
 
-    let _ = ack_tx.send(());
+    if let Some(mut mocktask) = mocktask {
+        let block = mocktask.is_block;
+        let x = mocktask.snooze;
+        let expr = mocktask.clone().expr;
+
+        let (res, start_at, end_at) = if block {
+            let (res, start_at, end_at) =
+                tokio::task::spawn_blocking(move || perform_sync(x, &expr))
+                    .await
+                    .unwrap();
+            tokio::task::yield_now().await;
+            (res, start_at, end_at)
+        } else {
+            perform_async(x, &expr).await
+        };
+
+        mocktask.start_at = Some(start_at);
+        mocktask.end_at = Some(end_at);
+        mocktask.res = Some(res);
+
+        if let Some(resource) = resource {
+            let _: Option<MockTask> = DB.update(resource).content(mocktask).await.unwrap();
+        }
+        let _ = ack_tx.send(());
+    } else {
+        // ack not found except
+        todo!()
+    }
 
     ack_rx
 }
@@ -79,21 +138,32 @@ async fn main() -> anyhow::Result<()> {
     let max_slots = 2000;
     let (tx, mut rx) = mpsc::channel(max_slots);
 
+    // DB part for prototype
+    DB.connect::<Ws>("localhost:8000").await?;
+    // Sign in to the server
+    DB.signin(Root {
+        username: "root",
+        password: "root",
+    })
+    .await?;
+
+    DB.use_ns("test").use_db("test").await?;
+
     loop {
         tokio::select! {
             Some(Ok(message)) = framed_reader.next() => {
                 match message {
-                    XMessage::TaskLaunch(id) => {
+                    XMessage::TaskLaunch { task_id, record_id } => {
                         // dummy message to be printed in coordinator side
                         framed_writer
                             .send(XMessage::BulkMessage(format!(
-                                "I got the task {id}, Sir! Working on it!"
+                                "Processing on {task_id}."
                             )))
                             .await?;
 
                         let tx_clone = tx.clone();
                         tokio::spawn(async move {
-                            let _ = run_task(id, tx_clone).await;
+                            let _ = run_task(task_id, record_id, tx_clone).await;
                         });
                     }
                     XMessage::HeartBeat(port) => {
@@ -117,10 +187,16 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn run_task<'a>(id: Uuid, tx: mpsc::Sender<XMessage>) -> anyhow::Result<()> {
+// task_id for communication back to communicator
+// record_id for se/de the record from task pool
+async fn run_task<'a>(
+    task_id: Uuid,
+    record_id: String,
+    tx: mpsc::Sender<XMessage>,
+) -> anyhow::Result<()> {
     // Send to tell start processing on the task
     let msg = XMessage::TaskStateChange {
-        id,
+        id: task_id,
         from: TaskState::Submit,
         to: TaskState::Run,
     };
@@ -130,19 +206,19 @@ async fn run_task<'a>(id: Uuid, tx: mpsc::Sender<XMessage>) -> anyhow::Result<()
     // 0. Run the task and get the ack_rx
     // 1. send a message and ask to add the item into the task table.
     // 2. send a message to ask for table look up.
-    let ack_rx = run_task_with_ack(id).await;
+    let ack_rx = run_task_with_ack(record_id).await;
 
     // rx ack resolved means the task is complete
     if let Ok(()) = ack_rx.await {
         let msg = XMessage::TaskStateChange {
-            id,
+            id: task_id,
             from: TaskState::Run,
             to: TaskState::Terminated(0),
         };
         tx.send(msg).await?;
     } else {
         let msg = XMessage::TaskStateChange {
-            id,
+            id: task_id,
             from: TaskState::Run,
             to: TaskState::Terminated(1), // TODO: exit_code from ack_rx
         };

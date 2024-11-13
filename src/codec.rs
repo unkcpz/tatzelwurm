@@ -13,7 +13,7 @@ use crate::task::{self, State};
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Operation {
     Inspect,
-    AddTask(u32),
+    AddTask(String),
     PlayTask(Uuid),
     PlayAllTask,
     KillTask(Uuid),
@@ -48,7 +48,10 @@ pub enum XMessage {
     BulkMessage(String),
 
     // The Uuid is the task uuid
-    TaskLaunch(Uuid),
+    TaskLaunch {
+        task_id: Uuid,
+        record_id: String,
+    },
 
     // hand shake message when the msg content is a string
     HandShake(String),
@@ -98,6 +101,9 @@ pub enum XMessage {
         from: task::State,
         to: task::State,
     },
+
+    // over
+    Over,
 }
 
 #[derive(Debug)]
@@ -107,7 +113,10 @@ pub enum IMessage {
 
     // The Uuid is the task uuid
     // dispatcher using worker's tx handler -> worker's rx, after table lookup
-    TaskLaunch(Uuid),
+    TaskLaunch {
+        task_id: Uuid,
+        record_id: String,
+    },
 
     // Operation act on worker table
     WorkerTableOp {
