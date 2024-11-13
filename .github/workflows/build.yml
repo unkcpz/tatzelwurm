@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  build:
+    name: Build 
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        # You can add more, for any target you'd like!
+        include:
+          - build: linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+          - build: macos-amd
+            os: macos-latest
+            target: x86_64-apple-darwin
+
+          - build: macos-amd
+            os: macos-latest
+            target: aarch64-apple-darwin
+
+          - build: windows-gnu
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the release version from the tag
+        run: echo "VERSION=nightly-$(date +'%Y-%m-%d')-${{ github.sha }}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Binary
+        run: cargo build --verbose --release --target ${{ matrix.target }}
+
