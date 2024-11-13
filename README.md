@@ -41,15 +41,24 @@ Decompress the file and in different terminals or multiplexers, run
 
 to start the coordinator.
 
-Run
+The task pool is mocked by using SurrealDB. 
+Therefore you need to [install the SurrealDB](https://surrealdb.com/docs/surrealdb/installation) and start a DB instance.
+
+For testing purpose, I recommend to use in memory DB by running:
 
 ```bash
-./actionwurm task add
+surreal start --user root --pass root memory
+```
+
+Add task to table and run it
+
+```bash
+./actionwurm task add -h
 ./actionwurm task play <id>
 ./actionwurm task play -a
 ```
 
-to add task to table and run it.
+The tasks can have different scale that run with different range of snooze time, and have different block type that required to be launched in async time or in threads.
 
 To check the task list and filtering on specific state of tasks 
 
