@@ -50,15 +50,14 @@ For testing purpose, I recommend to use in memory DB by running:
 surreal start --user root --pass root memory
 ```
 
-Add task to table and run it
+Add task to table and run it.
+The tasks can have different scale that run with different range of snooze time, and have different block type that required to be launched in async time or in threads.
 
 ```bash
 ./actionwurm task add -h
 ./actionwurm task play <id>
 ./actionwurm task play -a
 ```
-
-The tasks can have different scale that run with different range of snooze time, and have different block type that required to be launched in async time or in threads.
 
 To check the task list and filtering on specific state of tasks 
 
@@ -127,6 +126,9 @@ Before I move to next intense development and huge refactoring, the items above 
 I should polish and clear about design note and make an AEP for it first.
 
 At the current stage, the code base is small and every part is clear defined without too much abstractions.
+
+Since the task pool is added by using mocked surrealdb, which requires huge amount of crates dependencies.
+The worker and actioner binaries should be moved to crates that has independent `Cargo.toml`, to make the compile of server crate fast.
 
 ---------------------
 

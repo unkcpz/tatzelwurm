@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use futures::SinkExt;
 use rand::{self, Rng};
 use surrealdb::sql::Datetime;
+use tokio::time;
 use uuid::Uuid;
 
 use tokio::net::TcpStream;
@@ -103,6 +104,10 @@ enum BlockType {
 enum TaskCommand {
     /// Add a new task
     Add {
+        // number of tasks to add
+        #[arg(short, long)]
+        number: u64,
+
         // Scale of task, small, medium, large
         #[arg(short, long, value_enum)]
         scale: TaskScale,
@@ -205,38 +210,44 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Commands::Task { command } => match command {
-            TaskCommand::Add { scale, block_type } => {
-                let isblock = match block_type {
-                    BlockType::Sync => true,
-                    BlockType::Async => false,
-                };
+            TaskCommand::Add {
+                number,
+                scale,
+                block_type,
+            } => {
+                for _ in 0..number {
+                    let isblock = match block_type {
+                        BlockType::Sync => true,
+                        BlockType::Async => false,
+                    };
 
-                // small scale for 100 ~ 1000 millis
-                // medium for 1000 ~ 10_000 millis
-                // large for 10_000 ~ 100_000
-                let x = {
-                    let mut rng = rand::thread_rng();
-                    rng.gen_range(1..10)
-                };
+                    // small scale for 100 ~ 1000 millis
+                    // medium for 1000 ~ 10_000 millis
+                    // large for 10_000 ~ 100_000
+                    let x = {
+                        let mut rng = rand::thread_rng();
+                        rng.gen_range(1..10)
+                    };
 
-                let st = match scale {
-                    TaskScale::Small => x * 100,
-                    TaskScale::Medium => x * 1000,
-                    TaskScale::Large => x * 10_000,
-                };
+                    let st = match scale {
+                        TaskScale::Small => x * 100,
+                        TaskScale::Medium => x * 1000,
+                        TaskScale::Large => x * 10_000,
+                    };
 
-                let task = MockTask::new(st, isblock, Utc::now().into());
+                    let task = MockTask::new(st, isblock, Utc::now().into());
 
-                let created: Option<Record> = db.create("task").content(task).await?;
+                    let created: Option<Record> = db.create("task").content(task).await?;
 
-                if let Some(created) = created {
-                    let record_id = created.id.to_string();
+                    if let Some(created) = created {
+                        let record_id = created.id.to_string();
 
-                    framed_writer
-                        .send(XMessage::ActionerOp(Operation::AddTask(record_id)))
-                        .await?;
-                } else {
-                    eprintln!("not able to create task to pool.");
+                        framed_writer
+                            .send(XMessage::ActionerOp(Operation::AddTask(record_id)))
+                            .await?;
+                    } else {
+                        eprintln!("not able to create task to pool.");
+                    }
                 }
             }
             TaskCommand::Play { all: true, .. } => {
@@ -286,13 +297,32 @@ async fn main() -> anyhow::Result<()> {
         },
     }
 
-    if let Some(Ok(msg)) = framed_reader.next().await {
-        match msg {
-            XMessage::BulkMessage(s) => {
-                println!("{s}");
+    // After a command bundle, send over to finish the comm and listen to echo
+    framed_writer.send(XMessage::Over).await?;
+
+    let timeout = time::Duration::from_millis(500);
+    loop {
+        tokio::select! {
+            Some(Ok(msg)) = framed_reader.next() => {
+                match msg {
+                    XMessage::BulkMessage(s) => {
+                        println!("{s}");
+                    }
+
+                    XMessage::Over => {
+                        break;
+                    }
+
+                    _ => {
+                        dbg!(msg);
+                    }
+                }
             }
-            _ => {
-                dbg!(msg);
+
+            () = time::sleep(timeout) => {
+                println!("Timeout reached: No message received.");
+                // Handle timeout, e.g., log, retry, or terminate loop
+                break;
             }
         }
     }

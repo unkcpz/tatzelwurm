@@ -101,6 +101,9 @@ pub enum XMessage {
         from: task::State,
         to: task::State,
     },
+
+    // over
+    Over,
 }
 
 #[derive(Debug)]

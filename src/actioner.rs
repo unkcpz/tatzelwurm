@@ -32,16 +32,24 @@ pub async fn handle(
     // - should reported from worker when the mission is finished
     // - should also get information from worker complain about the long running
     // block process if it runs on non-block worker.
-    if let Some(Ok(msg)) = framed_reader.next().await {
-        match msg {
-            XMessage::WorkerTablePrint => {
-                let resp_msg = XMessage::BulkMessage(format!("{}\n", worker_table.render().await,));
-                framed_writer.send(resp_msg).await?;
-            }
+    loop {
+        if let Some(Ok(msg)) = framed_reader.next().await {
+            match msg {
+                // You say over, I say over
+                XMessage::Over => {
+                    framed_writer.send(XMessage::Over).await?;
+                    break;
+                }
 
-            XMessage::TaskTablePrint { states } => {
-                let count_info = task_table.count().await;
-                let count_info = format!("created: {}, ready: {}, submit: {}, pause: {}, run: {}, complete: {}, killed: {}.",
+                XMessage::WorkerTablePrint => {
+                    let rtable = worker_table.render().await.to_string();
+                    let resp_msg = XMessage::BulkMessage(rtable);
+                    framed_writer.send(resp_msg).await?;
+                }
+
+                XMessage::TaskTablePrint { states } => {
+                    let count_info = task_table.count().await;
+                    let count_info = format!("created: {}, ready: {}, submit: {}, pause: {}, run: {}, complete: {}, killed: {}.",
                     count_info.get(&State::Created).unwrap_or(&0),
                     count_info.get(&State::Ready).unwrap_or(&0),
                     count_info.get(&State::Submit).unwrap_or(&0),
@@ -50,86 +58,89 @@ pub async fn handle(
                     count_info.get(&State::Terminated(0)).unwrap_or(&0),
                     count_info.get(&State::Terminated(-1)).unwrap_or(&0),
                 );
-                let tasks = task_table.filter_by_states(states).await;
-                let task_table = task::Table::from_mapping(tasks);
-                let resp_msg = XMessage::BulkMessage(format!(
-                    "{}\n\n{}\n",
-                    task_table.render().await,
-                    count_info,
-                ));
-                framed_writer.send(resp_msg).await?;
-            }
-
-            // Signal direction - src: actioner, dst: coordinator
-            // Handle signal n/a -> Created
-            XMessage::ActionerOp(Operation::AddTask(record_id)) => {
-                // TODO: need to check if the task exist
-                // TODO: priority passed from operation
-                let task_ = Task::new(0, &record_id);
-                let id = task_table.create(task_.clone()).await;
-
-                // send resp to actioner
-                let resp_msg = XMessage::BulkMessage(format!(
-                    "Add task id={id}, map to task record_id={record_id} to run.\n"
-                ));
-                framed_writer.send(resp_msg).await?;
-            }
-            // Signal direction - src: actioner, dst: coordinator
-            // Handle signal x -> Ready
-            XMessage::ActionerOp(Operation::PlayTask(id)) => {
-                // TODO: need to check init state is able to be played
-                let task_ = task_table.read(&id).await;
-                if let Some(mut task_) = task_ {
-                    task_.state = task::State::Ready;
-                    task_table.update(&id, task_).await?;
-                }
-
-                let resp_msg = XMessage::BulkMessage(format!("Launching task uuid={id}.\n",));
-                framed_writer.send(resp_msg).await?;
-            }
-            // Signal direction - src: actioner, dst: coordinator
-            // Handle signal all pause/created x -> Ready
-            XMessage::ActionerOp(Operation::PlayAllTask) => {
-                // TODO: also include pause state to resume
-                let resumable_tasks = task_table
-                    .filter_by_states(vec![task::State::Created])
-                    .await;
-
-                for (task_id, _) in resumable_tasks {
-                    let Some(mut task_) = task_table.read(&task_id).await else {
-                        continue;
-                    };
-                    // XXX: check, is cloned?? so the old_state is different from after changed
-                    let old_state = task_.state;
-
-                    task_.state = task::State::Ready;
-                    task_table.update(&task_id, task_).await?;
-                    println!(
-                        "Play task {task_id}: {} -> {}",
-                        old_state,
-                        task::State::Ready
-                    );
-                }
-            }
-            // Signal direction - src: actioner, dst: coordinator
-            // Handle signal x -> Terminated(-1)
-            XMessage::ActionerOp(Operation::KillTask(id)) => {
-                let task_ = task_table.read(&id).await;
-                if let Some(mut task_) = task_ {
-                    task_.state = task::State::Terminated(-1);
-                    task_table.update(&id, task_).await?;
-
-                    // TODO: also sending a cancelling signal to the runnning task on worker
-
-                    let resp_msg = XMessage::BulkMessage(format!("Kill task uuid={id}.\n",));
+                    let tasks = task_table.filter_by_states(states).await;
+                    let task_table = task::Table::from_mapping(tasks);
+                    let resp_msg = XMessage::BulkMessage(format!(
+                        "{}\n\n{}",
+                        task_table.render().await,
+                        count_info,
+                    ));
                     framed_writer.send(resp_msg).await?;
                 }
-            }
-            _ => {
-                let resp_msg = XMessage::BulkMessage(format!(
-                    "Shutup, I try to ignore you, since you say '{msg:#?}'"
-                ));
-                framed_writer.send(resp_msg).await?;
+
+                // Signal direction - src: actioner, dst: coordinator
+                // Handle signal n/a -> Created
+                XMessage::ActionerOp(Operation::AddTask(record_id)) => {
+                    // TODO: need to check if the task exist
+                    // TODO: priority passed from operation
+                    let task_ = Task::new(0, &record_id);
+                    let id = task_table.create(task_.clone()).await;
+
+                    // send resp to actioner
+                    let resp_msg = XMessage::BulkMessage(format!(
+                        "Add task id={id}, map to task record_id={record_id} to run."
+                    ));
+                    framed_writer.send(resp_msg).await?;
+                }
+                // Signal direction - src: actioner, dst: coordinator
+                // Handle signal x -> Ready
+                XMessage::ActionerOp(Operation::PlayTask(id)) => {
+                    // TODO: need to check init state is able to be played
+                    let task_ = task_table.read(&id).await;
+                    if let Some(mut task_) = task_ {
+                        task_.state = task::State::Ready;
+                        task_table.update(&id, task_).await?;
+                    }
+
+                    let resp_msg = XMessage::BulkMessage(format!("Launching task uuid={id}.",));
+                    framed_writer.send(resp_msg).await?;
+                }
+                // Signal direction - src: actioner, dst: coordinator
+                // Handle signal all pause/created x -> Ready
+                XMessage::ActionerOp(Operation::PlayAllTask) => {
+                    // TODO: also include pause state to resume
+                    let resumable_tasks = task_table
+                        .filter_by_states(vec![task::State::Created])
+                        .await;
+
+                    for (task_id, _) in resumable_tasks {
+                        let Some(mut task_) = task_table.read(&task_id).await else {
+                            continue;
+                        };
+                        // XXX: check, is cloned?? so the old_state is different from after changed
+                        let old_state = task_.state;
+
+                        task_.state = task::State::Ready;
+                        task_table.update(&task_id, task_).await?;
+                        println!(
+                            "Play task {task_id}: {} -> {}",
+                            old_state,
+                            task::State::Ready
+                        );
+                    }
+                }
+                // Signal direction - src: actioner, dst: coordinator
+                // Handle signal x -> Terminated(-1)
+                XMessage::ActionerOp(Operation::KillTask(id)) => {
+                    let task_ = task_table.read(&id).await;
+                    if let Some(mut task_) = task_ {
+                        task_.state = task::State::Terminated(-1);
+                        task_table.update(&id, task_).await?;
+
+                        // TODO: also sending a cancelling signal to the runnning task on worker
+
+                        let resp_msg = XMessage::BulkMessage(format!("Kill task uuid={id}.\n",));
+                        framed_writer.send(resp_msg).await?;
+                    }
+                }
+
+                // boss is asking nonsense
+                _ => {
+                    let resp_msg = XMessage::BulkMessage(format!(
+                        "Shutup, I try to ignore you, since you say '{msg:#?}'"
+                    ));
+                    framed_writer.send(resp_msg).await?;
+                }
             }
         }
     }
