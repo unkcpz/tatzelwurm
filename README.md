@@ -133,6 +133,7 @@ The worker and actioner binaries should be moved to crates that has independent 
 ---------------------
 
 - [ ] benchmark throughput, not too much to bench, the bottleneck is in DB access.
+- [ ] The notifier mechanism for table lookup.
 - [ ] pyo3 interface to expose the communicate part for python runner.
 - [ ] Adding unit tests for things above so stady to move forward.
 - [ ] table management using actor model instead of using mutex.
@@ -147,7 +148,7 @@ The worker and actioner binaries should be moved to crates that has independent 
 - [ ] broadcase message for group operations.
 - [ ] rpc (message) to change the state of single running task.
 - [ ] persistent store table to disk periodically for recover from reboot.
-- [ ] stress test with pseudo tasks (the function re-constructed from files, can be simply async/sync sleep functions)
+- [x] stress test with pseudo tasks (the function re-constructed from files, can be simply async/sync sleep functions)
 - [ ] stress test and handle the edge cases such as actors are over-loaded.
 - [ ] integrating to test with plumpy.
 - [ ] integrating to aiida-core.
